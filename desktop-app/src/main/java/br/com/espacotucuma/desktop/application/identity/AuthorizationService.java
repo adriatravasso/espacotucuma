@@ -38,6 +38,7 @@ public final class AuthorizationService {
             CLIENT_REGISTER,
             CLIENT_UPDATE,
             PROFESSIONAL_READ,
+            SERVICE_READ,
             SCHEDULE_READ,
             SCHEDULE_MANAGE,
             ATTENDANCE_RECORD,

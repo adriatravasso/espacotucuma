@@ -184,6 +184,11 @@ public final class TucumaEntryDialog extends Dialog<Map<String, String>> {
           case "phone" -> "Telefone";
           case "contact" -> "Contato opcional";
           case "preferences" -> "Preferências administrativas";
+          case "serviceName" -> "Nome do serviço";
+          case "serviceCategory" -> "Categoria";
+          case "durationMinutes" -> "Duração (minutos)";
+          case "price" -> "Preço (R$)";
+          case "commissionPercent" -> "Comissão padrão (%)";
           default -> null;
         };
     if (known != null) return known;
