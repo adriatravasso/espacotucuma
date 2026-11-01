@@ -75,6 +75,7 @@ class OfflineBusinessJourneyTest {
             new InitialAdministratorSetup(
                 "Espaço Tucumã", "Administradora offline", "admin", ADMIN_PASSWORD));
     assertTrue(openRuntime.login().login("admin", ADMIN_PASSWORD.clone()).isPresent());
+    var client = openRuntime.registerClient().register("Cliente Offline", null, null, null);
 
     ProfessionalSchedule schedule =
         new ProfessionalSchedule(
@@ -171,41 +172,13 @@ class OfflineBusinessJourneyTest {
     robot.interact(() -> stage.setScene(new Scene(shell.root(), 1180, 720)));
 
     robot.clickOn("#module-clients");
-    robot.clickOn("#tableNew");
-    waitForNode(robot, "#form-name");
-    robot.interact(
-        () -> robot.lookup("#form-name").queryTextInputControl().setText("Cliente Offline"));
-    robot.interact(() -> robot.lookup("Salvar").queryButton().fire());
+    waitForNode(robot, "#dataTable");
     WaitForAsyncUtils.waitFor(
         10,
         TimeUnit.SECONDS,
         () ->
-            openRuntime
-                    .clients()
-                    .searchPage(
-                        new br.com.espacotucuma.desktop.application.client.ClientPageQuery(
-                            "Cliente Offline",
-                            br.com.espacotucuma.desktop.application.client.ClientContactFilter.ALL,
-                            br.com.espacotucuma.desktop.application.client.ClientSortField.NAME,
-                            true,
-                            0,
-                            10))
-                    .items()
-                    .size()
-                == 1);
-    var client =
-        openRuntime
-            .clients()
-            .searchPage(
-                new br.com.espacotucuma.desktop.application.client.ClientPageQuery(
-                    "Cliente Offline",
-                    br.com.espacotucuma.desktop.application.client.ClientContactFilter.ALL,
-                    br.com.espacotucuma.desktop.application.client.ClientSortField.NAME,
-                    true,
-                    0,
-                    10))
-            .items()
-            .getFirst();
+            robot.lookup("#dataTable").queryTableView().getItems().stream()
+                .anyMatch(row -> row.equals(client)));
 
     LocalDate appointmentDay = LocalDate.now(BUSINESS_ZONE).plusDays(1);
     robot.clickOn("#module-agenda");
