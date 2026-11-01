@@ -51,7 +51,9 @@ public final class TucumaDesktopApplication extends Application {
                 runtime.clients(),
                 runtime.registerClient(),
                 runtime.maintainClient(),
-                runtime.authorization()));
+                runtime.authorization()),
+            new ProfessionalRegistryPane(
+                runtime.professionals(), runtime.maintainProfessional(), runtime.authorization()));
     shell.setLogoutAction(
         () -> {
           runtime.logout().logout();

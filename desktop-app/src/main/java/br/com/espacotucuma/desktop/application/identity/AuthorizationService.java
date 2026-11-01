@@ -37,6 +37,7 @@ public final class AuthorizationService {
         case CLIENT_READ,
             CLIENT_REGISTER,
             CLIENT_UPDATE,
+            PROFESSIONAL_READ,
             SCHEDULE_READ,
             SCHEDULE_MANAGE,
             ATTENDANCE_RECORD,
