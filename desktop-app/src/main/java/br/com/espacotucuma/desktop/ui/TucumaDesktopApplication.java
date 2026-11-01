@@ -98,7 +98,8 @@ public final class TucumaDesktopApplication extends Application {
             appointmentPane,
             cashPane,
             reportsPane,
-            inventoryPane);
+            inventoryPane,
+            runtime.manualSynchronization());
     appointmentPane.setMutationListener(shell::refreshStatus);
     shell.setLogoutAction(
         () -> {

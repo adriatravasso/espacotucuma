@@ -1,14 +1,19 @@
 package br.com.espacotucuma.desktop.ui;
 
 import br.com.espacotucuma.desktop.application.ProtectionStatus;
+import br.com.espacotucuma.desktop.application.port.synchronization.ManualSynchronizationPort;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import javafx.animation.KeyFrame;
 import javafx.animation.Timeline;
+import javafx.concurrent.Task;
 import javafx.geometry.Insets;
 import javafx.scene.Parent;
+import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.control.Menu;
@@ -41,6 +46,11 @@ final class TucumaMainShell {
   private final Parent reportsView;
   private final Parent inventoryView;
   private final Timeline statusRefresh;
+  private final ManualSynchronizationPort manualSynchronization;
+  private final AtomicBoolean synchronizationRunning = new AtomicBoolean();
+  private final AtomicReference<Thread> synchronizationWorker = new AtomicReference<>();
+  private Button synchronizationButton;
+  private MenuItem synchronizationMenuItem;
   private Runnable logoutAction = () -> {};
   private String activeModule = "Início";
 
@@ -151,6 +161,30 @@ final class TucumaMainShell {
       Parent cashView,
       Parent reportsView,
       Parent inventoryView) {
+    this(
+        statusLoader,
+        clientsView,
+        professionalsView,
+        servicesView,
+        packagesView,
+        appointmentsView,
+        cashView,
+        reportsView,
+        inventoryView,
+        () -> {});
+  }
+
+  TucumaMainShell(
+      Supplier<ProtectionStatus> statusLoader,
+      Parent clientsView,
+      Parent professionalsView,
+      Parent servicesView,
+      Parent packagesView,
+      Parent appointmentsView,
+      Parent cashView,
+      Parent reportsView,
+      Parent inventoryView,
+      ManualSynchronizationPort manualSynchronization) {
     this.statusLoader = statusLoader;
     this.clientsView = clientsView;
     this.professionalsView = professionalsView;
@@ -160,6 +194,7 @@ final class TucumaMainShell {
     this.cashView = cashView;
     this.reportsView = reportsView;
     this.inventoryView = inventoryView;
+    this.manualSynchronization = manualSynchronization;
     root.setTop(new VBox(createMenuBar(), createToolBar()));
     root.setLeft(createNavigation());
     root.setCenter(workArea);
@@ -251,7 +286,7 @@ final class TucumaMainShell {
                 moduleItem("Caixa", "menu-cash"),
                 moduleItem("Estoque", "menu-inventory")),
             menu("Relatórios", moduleItem("Relatórios", "menu-reports")),
-            menu("Ferramentas", disabledItem("Sincronizar (indisponível)", "menu-sync")),
+            menu("Ferramentas", createSynchronizationMenuItem()),
             menu("Ajuda", item("Sobre", "menu-about", () -> showModule("Sobre"))));
     return menuBar;
   }
@@ -265,6 +300,13 @@ final class TucumaMainShell {
     logout.setId("toolbar-logout");
     logout.setOnAction(event -> logoutAction.run());
 
+    synchronizationButton = new Button("Sincronizar");
+    synchronizationButton.setId("command-sync");
+    synchronizationButton.setTooltip(
+        new javafx.scene.control.Tooltip("Envia alterações pendentes somente quando acionado."));
+    synchronizationButton.setAccessibleHelp("Inicia a sincronização manual.");
+    synchronizationButton.setOnAction(event -> startSynchronization());
+
     ToolBar toolBar =
         new ToolBar(
             disabledButton("Novo", "command-new"),
@@ -272,14 +314,78 @@ final class TucumaMainShell {
             disabledButton("Salvar", "command-save"),
             disabledButton("Cancelar", "command-cancel"),
             disabledButton("Imprimir", "command-print"),
-            disabledButton(
-                "Sincronizar",
-                "command-sync",
-                "A sincronização manual ainda não foi implementada."),
+            synchronizationButton,
             quickAgenda,
             logout);
     toolBar.setId("commandToolbar");
     return toolBar;
+  }
+
+  private MenuItem createSynchronizationMenuItem() {
+    synchronizationMenuItem = new MenuItem("Sincronizar");
+    synchronizationMenuItem.setId("menu-sync");
+    synchronizationMenuItem.setOnAction(event -> startSynchronization());
+    return synchronizationMenuItem;
+  }
+
+  private void startSynchronization() {
+    if (!synchronizationRunning.compareAndSet(false, true)) {
+      synchronizationButton.setText("Cancelando…");
+      synchronizationButton.setDisable(true);
+      synchronizationMenuItem.setText("Cancelando sincronização…");
+      synchronizationMenuItem.setDisable(true);
+      Thread worker = synchronizationWorker.get();
+      if (worker != null) worker.interrupt();
+      return;
+    }
+    synchronizationButton.setText("Cancelar");
+    synchronizationMenuItem.setText("Cancelar sincronização");
+    Task<Void> task =
+        new Task<>() {
+          @Override
+          protected Void call() {
+            manualSynchronization.synchronizeNow();
+            return null;
+          }
+        };
+    task.setOnSucceeded(
+        event -> {
+          finishSynchronization();
+          refreshStatus();
+          Alert alert = new Alert(Alert.AlertType.INFORMATION, "Sincronização concluída.");
+          alert.setTitle("Espaço Tucumã");
+          alert.setHeaderText("Dados sincronizados");
+          TucumaTheme.apply(alert.getDialogPane());
+          alert.show();
+        });
+    task.setOnFailed(
+        event -> {
+          finishSynchronization();
+          Throwable failure = task.getException();
+          Alert alert =
+              new Alert(
+                  Alert.AlertType.ERROR,
+                  failure == null || failure.getMessage() == null
+                      ? "A sincronização falhou. As alterações continuam pendentes."
+                      : failure.getMessage());
+          alert.setTitle("Espaço Tucumã");
+          alert.setHeaderText("Sincronização não concluída");
+          TucumaTheme.apply(alert.getDialogPane());
+          alert.show();
+        });
+    Thread worker = new Thread(task, "tucuma-manual-sync");
+    worker.setDaemon(true);
+    synchronizationWorker.set(worker);
+    worker.start();
+  }
+
+  private void finishSynchronization() {
+    synchronizationWorker.set(null);
+    synchronizationRunning.set(false);
+    synchronizationButton.setDisable(false);
+    synchronizationMenuItem.setDisable(false);
+    synchronizationButton.setText("Sincronizar");
+    synchronizationMenuItem.setText("Sincronizar");
   }
 
   private VBox createNavigation() {

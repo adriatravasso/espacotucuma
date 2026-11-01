@@ -10,6 +10,9 @@ import com.tngtech.archunit.core.importer.ClassFileImporter;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import javafx.scene.Scene;
 import javafx.scene.control.MenuBar;
 import javafx.scene.control.MenuItem;
@@ -26,10 +29,48 @@ import org.testfx.framework.junit5.Start;
 class TucumaMainShellTest {
 
   private TucumaMainShell shell;
+  private AtomicInteger synchronizationCalls;
+  private CountDownLatch synchronizationStarted;
+  private CountDownLatch releaseSynchronization;
 
   @Start
   void start(Stage stage) {
-    shell = new TucumaMainShell("Administradora Sintética");
+    synchronizationCalls = new AtomicInteger();
+    synchronizationStarted = new CountDownLatch(1);
+    releaseSynchronization = new CountDownLatch(1);
+    shell =
+        new TucumaMainShell(
+            () ->
+                new ProtectionStatus(
+                    "Administradora Sintética",
+                    Path.of("dados/tucuma.sqlite"),
+                    0,
+                    0,
+                    null,
+                    0,
+                    null,
+                    null),
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            () -> {
+              synchronizationCalls.incrementAndGet();
+              synchronizationStarted.countDown();
+              boolean interrupted = false;
+              while (releaseSynchronization.getCount() > 0) {
+                try {
+                  releaseSynchronization.await(5, TimeUnit.SECONDS);
+                } catch (InterruptedException ignored) {
+                  interrupted = true;
+                }
+              }
+              if (interrupted) Thread.currentThread().interrupt();
+            });
     stage.setScene(new Scene(shell.root(), 1180, 720));
     stage.show();
   }
@@ -68,16 +109,12 @@ class TucumaMainShellTest {
   void unavailableCommandsStayDisabledAndNavigationDoesNotReachRemotePorts(FxRobot robot) {
     for (String command :
         new String[] {
-          "#command-new",
-          "#command-edit",
-          "#command-save",
-          "#command-cancel",
-          "#command-print",
-          "#command-sync"
+          "#command-new", "#command-edit", "#command-save", "#command-cancel", "#command-print",
         }) {
       assertTrue(
           robot.lookup(command).queryButton().isDisabled(), command + " deve estar desativado");
     }
+    assertFalse(robot.lookup("#command-sync").queryButton().isDisabled());
     assertTrue(robot.lookup("#command-sync").queryButton().getAccessibleHelp().contains("manual"));
 
     JavaClass shell = new ClassFileImporter().importClass(TucumaMainShell.class);
@@ -89,14 +126,38 @@ class TucumaMainShellTest {
                         || dependency
                             .getTargetClass()
                             .getName()
-                            .contains("application.port.synchronization")),
-        "A shell não deve manter clientes ou portas de comunicação remota.");
+                            .contains("infrastructure.synchronization")),
+        "A shell não deve manter cliente HTTP ou dependências de infraestrutura remota.");
 
     robot.interact(() -> robot.lookup("#module-clients").queryButton().fire());
     robot.press(KeyCode.CONTROL).press(KeyCode.N).release(KeyCode.N).release(KeyCode.CONTROL);
     assertEquals("Clientes", robot.lookup("#moduleTitle").queryLabeled().getText());
     assertEquals(
         "Usuário: Administradora Sintética", robot.lookup("#currentUser").queryLabeled().getText());
+  }
+
+  @Test
+  @Timeout(30)
+  void synchronizationRunsOnlyAfterClickAndDoesNotAllowParallelReentry(FxRobot robot)
+      throws Exception {
+    assertEquals(0, synchronizationCalls.get());
+    robot.interact(() -> robot.lookup("#command-sync").queryButton().fire());
+    assertTrue(synchronizationStarted.await(5, TimeUnit.SECONDS));
+    try {
+      robot.interact(
+          () ->
+              robot.lookup("#mainMenuBar").queryAs(MenuBar.class).getMenus().stream()
+                  .filter(menu -> menu.getText().equals("Ferramentas"))
+                  .flatMap(menu -> menu.getItems().stream())
+                  .filter(item -> item.getId().equals("menu-sync"))
+                  .findFirst()
+                  .orElseThrow()
+                  .fire());
+      assertEquals(1, synchronizationCalls.get());
+      assertTrue(robot.lookup("#command-sync").queryButton().isDisabled());
+    } finally {
+      releaseSynchronization.countDown();
+    }
   }
 
   @Test

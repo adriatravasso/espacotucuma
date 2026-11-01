@@ -193,6 +193,22 @@ class DeviceAuthenticationIntegrationTest {
 
     mockMvc
         .perform(
+            get("/sync/operations/status")
+                .param("ids", acceptedResponse.results().getFirst().operationId().toString())
+                .param("ids", UUID.randomUUID().toString())
+                .header("Authorization", authorization)
+                .header(SyncContract.VERSION_HEADER, "1"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.contractVersion").value(1))
+        .andExpect(jsonPath("$.results.length()").value(1))
+        .andExpect(
+            jsonPath("$.results[0].operationId")
+                .value(acceptedResponse.results().getFirst().operationId().toString()))
+        .andExpect(jsonPath("$.results[0].outcome").value("ACCEPTED"))
+        .andExpect(jsonPath("$.results[0].remoteVersion").value(1));
+
+    mockMvc
+        .perform(
             post("/sync/operations")
                 .header("Authorization", authorization)
                 .header(SyncContract.VERSION_HEADER, "1")

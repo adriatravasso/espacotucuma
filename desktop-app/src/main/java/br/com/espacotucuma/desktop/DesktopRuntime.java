@@ -27,16 +27,20 @@ import br.com.espacotucuma.desktop.application.port.commission.CommissionStateme
 import br.com.espacotucuma.desktop.application.port.finance.CashTurnRepository;
 import br.com.espacotucuma.desktop.application.port.finance.PaymentRepository;
 import br.com.espacotucuma.desktop.application.port.inventory.InventoryRepository;
+import br.com.espacotucuma.desktop.application.port.outbox.OutboxRepository;
 import br.com.espacotucuma.desktop.application.port.prepaid.PrepaidPackageRepository;
 import br.com.espacotucuma.desktop.application.port.professional.ProfessionalRepository;
 import br.com.espacotucuma.desktop.application.port.scheduling.AppointmentRepository;
 import br.com.espacotucuma.desktop.application.port.service.ServiceRepository;
+import br.com.espacotucuma.desktop.application.port.synchronization.DeviceCredentialStore;
+import br.com.espacotucuma.desktop.application.port.synchronization.ManualSynchronizationPort;
 import br.com.espacotucuma.desktop.application.prepaid.MaintainPrepaidPackagesUseCase;
 import br.com.espacotucuma.desktop.application.professional.MaintainProfessionalUseCase;
 import br.com.espacotucuma.desktop.application.reports.QueryCommercialReportsUseCase;
 import br.com.espacotucuma.desktop.application.scheduling.MaintainAppointmentUseCase;
 import br.com.espacotucuma.desktop.application.service.MaintainServiceUseCase;
 import br.com.espacotucuma.desktop.infrastructure.security.Pbkdf2PasswordHasher;
+import br.com.espacotucuma.desktop.infrastructure.security.WindowsCredentialStore;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.LocalDatabaseSession;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteAppointmentRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteAttendanceRepository;
@@ -59,7 +63,9 @@ import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteProtectionStatusR
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteServiceRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteUnitOfWork;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteUserAdministrationRepository;
+import br.com.espacotucuma.desktop.infrastructure.synchronization.HttpManualSynchronizationClient;
 import java.io.IOException;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 import java.util.logging.FileHandler;
@@ -104,6 +110,7 @@ public final class DesktopRuntime implements AutoCloseable {
   private final InventoryRepository inventory;
   private final MaintainInventoryUseCase maintainInventory;
   private final QueryCommercialReportsUseCase commercialReports;
+  private final ManualSynchronizationPort manualSynchronization;
 
   private DesktopRuntime(
       LocalDatabaseSession database,
@@ -139,6 +146,7 @@ public final class DesktopRuntime implements AutoCloseable {
       InventoryRepository inventory,
       MaintainInventoryUseCase maintainInventory,
       QueryCommercialReportsUseCase commercialReports,
+      ManualSynchronizationPort manualSynchronization,
       boolean testProfile) {
     this.database = database;
     this.logHandler = logHandler;
@@ -173,6 +181,7 @@ public final class DesktopRuntime implements AutoCloseable {
     this.inventory = inventory;
     this.maintainInventory = maintainInventory;
     this.commercialReports = commercialReports;
+    this.manualSynchronization = manualSynchronization;
     this.testProfile = testProfile;
   }
 
@@ -365,6 +374,9 @@ public final class DesktopRuntime implements AutoCloseable {
           new SqliteUserAdministrationRepository(database.connection(), unitOfWork);
       SqliteProtectionStatusRepository protectionStatus =
           new SqliteProtectionStatusRepository(database.connection(), unitOfWork);
+      OutboxRepository outbox = new SqliteOutboxRepository(database.connection(), unitOfWork);
+      ManualSynchronizationPort manualSynchronization =
+          createManualSynchronization(outbox, unitOfWork);
       DeactivateUserUseCase deactivateUser =
           new DeactivateUserUseCase(unitOfWork, userRepository, authorization, audit, stationId);
       ChangeUserRoleUseCase changeUserRole =
@@ -404,6 +416,7 @@ public final class DesktopRuntime implements AutoCloseable {
           inventory,
           maintainInventory,
           commercialReports,
+          manualSynchronization,
           environment.profile()
               == br.com.espacotucuma.desktop.application.config.EnvironmentProfile.TEST);
     } catch (IOException | java.sql.SQLException | RuntimeException error) {
@@ -540,6 +553,28 @@ public final class DesktopRuntime implements AutoCloseable {
 
   public QueryCommercialReportsUseCase commercialReports() {
     return commercialReports;
+  }
+
+  public ManualSynchronizationPort manualSynchronization() {
+    return manualSynchronization;
+  }
+
+  private static ManualSynchronizationPort createManualSynchronization(
+      OutboxRepository outbox, SqliteUnitOfWork unitOfWork) {
+    String baseUrl = System.getenv("TUCUMA_SYNC_BASE_URL");
+    String deviceId = System.getenv("TUCUMA_SYNC_DEVICE_ID");
+    if (baseUrl == null || baseUrl.isBlank() || deviceId == null || deviceId.isBlank()) {
+      return () -> {
+        throw new IllegalStateException(
+            "Configure TUCUMA_SYNC_BASE_URL e TUCUMA_SYNC_DEVICE_ID após parear esta estação.");
+      };
+    }
+    return new HttpManualSynchronizationClient(
+        URI.create(baseUrl.trim()),
+        UUID.fromString(deviceId.trim()),
+        (DeviceCredentialStore) new WindowsCredentialStore(),
+        outbox,
+        unitOfWork);
   }
 
   public br.com.espacotucuma.desktop.application.ProtectionStatus protectionStatus() {
