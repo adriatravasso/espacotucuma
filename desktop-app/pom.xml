@@ -32,6 +32,11 @@
             <artifactId>junit-jupiter-engine</artifactId>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>com.tngtech.archunit</groupId>
+            <artifactId>archunit</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
@@ -40,7 +45,7 @@
                 <groupId>org.openjfx</groupId>
                 <artifactId>javafx-maven-plugin</artifactId>
                 <configuration>
-                    <mainClass>br.com.espacotucuma.desktop.TucumaDesktopApplication</mainClass>
+                    <mainClass>br.com.espacotucuma.desktop.ui.TucumaDesktopApplication</mainClass>
                 </configuration>
             </plugin>
         </plugins>
