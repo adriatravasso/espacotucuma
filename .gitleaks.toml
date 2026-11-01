@@ -1,0 +1,11 @@
+title = "Espaço Tucumã secret scan"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Marcador sintético de credencial inválida removido da jornada de teste; falso positivo histórico do curl-auth-header."
+condition = "AND"
+commits = ["43f07aa550501fa0d22a28ac05c1aa08e2193055"]
+paths = ['''^scripts/test-demo-environment\.sh$''']
+regexes = ['''credencial-demo-invalida''']
