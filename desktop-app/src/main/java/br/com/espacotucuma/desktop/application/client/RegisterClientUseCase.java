@@ -1,5 +1,7 @@
 package br.com.espacotucuma.desktop.application.client;
 
+import br.com.espacotucuma.desktop.application.identity.AuthorizationService;
+import br.com.espacotucuma.desktop.application.identity.Permission;
 import br.com.espacotucuma.desktop.application.outbox.PendingOperation;
 import br.com.espacotucuma.desktop.application.port.client.ClientRepository;
 import br.com.espacotucuma.desktop.application.port.outbox.OutboxRepository;
@@ -16,19 +18,23 @@ public final class RegisterClientUseCase {
   private final ClientRepository clients;
   private final OutboxRepository outbox;
   private final UUID originStationId;
+  private final AuthorizationService authorization;
 
   public RegisterClientUseCase(
       UnitOfWork unitOfWork,
       ClientRepository clients,
       OutboxRepository outbox,
-      UUID originStationId) {
+      UUID originStationId,
+      AuthorizationService authorization) {
     this.unitOfWork = Objects.requireNonNull(unitOfWork, "unitOfWork");
     this.clients = Objects.requireNonNull(clients, "clients");
     this.outbox = Objects.requireNonNull(outbox, "outbox");
     this.originStationId = Objects.requireNonNull(originStationId, "originStationId");
+    this.authorization = Objects.requireNonNull(authorization, "authorization");
   }
 
   public Client register(String name, String phone) {
+    authorization.require(Permission.CLIENT_REGISTER);
     Instant now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
     Client client = new Client(UUID.randomUUID(), name, phone, now);
     UUID operationId = UUID.randomUUID();

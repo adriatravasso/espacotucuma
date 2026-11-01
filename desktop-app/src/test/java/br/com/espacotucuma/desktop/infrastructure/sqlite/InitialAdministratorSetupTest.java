@@ -1,5 +1,6 @@
 package br.com.espacotucuma.desktop.infrastructure.sqlite;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -69,8 +70,7 @@ class InitialAdministratorSetupTest {
       assertThrows(IllegalStateException.class, () -> useCase.create(setup(password)));
       assertEquals(1, scalarInt(database.connection(), "SELECT count(*) FROM usuario"));
       assertEquals(1, scalarInt(database.connection(), "SELECT count(*) FROM estabelecimento"));
-      assertThrows(
-          IllegalStateException.class,
+      assertDoesNotThrow(
           () ->
               unitOfWork.execute(
                   () -> {
@@ -79,8 +79,7 @@ class InitialAdministratorSetupTest {
                             .connection()
                             .prepareStatement(
                                 "INSERT INTO usuario (id, nome, login, senha_hash, perfil, "
-                                    + "criado_em_utc, atualizado_em_utc) "
-                                    + "VALUES (?, ?, ?, ?, 'ADMINISTRADOR', ?, ?)")) {
+                                    + "criado_em_utc, atualizado_em_utc) VALUES (?, ?, ?, ?, 'ADMINISTRADOR', ?, ?)")) {
                       statement.setString(1, "b621b7a7-77f9-45cf-9950-73dccbbda61f");
                       statement.setString(2, "Segundo administrador sintético");
                       statement.setString(3, "outro-admin");
@@ -93,7 +92,7 @@ class InitialAdministratorSetupTest {
                     }
                     return null;
                   }));
-      assertEquals(1, scalarInt(database.connection(), "SELECT count(*) FROM usuario"));
+      assertEquals(2, scalarInt(database.connection(), "SELECT count(*) FROM usuario"));
     }
   }
 

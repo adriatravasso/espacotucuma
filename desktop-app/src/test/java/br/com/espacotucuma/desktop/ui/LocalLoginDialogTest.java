@@ -1,0 +1,98 @@
+package br.com.espacotucuma.desktop.ui;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import br.com.espacotucuma.desktop.application.identity.CreateFirstAdministratorUseCase;
+import br.com.espacotucuma.desktop.application.identity.InitialAdministratorSetup;
+import br.com.espacotucuma.desktop.application.identity.LoginUseCase;
+import br.com.espacotucuma.desktop.application.identity.SessionContext;
+import br.com.espacotucuma.desktop.infrastructure.security.Pbkdf2PasswordHasher;
+import br.com.espacotucuma.desktop.infrastructure.sqlite.LocalDatabaseSession;
+import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteInitialSetupRepository;
+import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteLocalCredentialRepository;
+import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteLoginAttemptRepository;
+import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteUnitOfWork;
+import java.nio.file.Path;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import javafx.application.Platform;
+import javafx.scene.Scene;
+import javafx.scene.layout.StackPane;
+import javafx.stage.Stage;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.io.TempDir;
+import org.testfx.api.FxRobot;
+import org.testfx.framework.junit5.ApplicationExtension;
+import org.testfx.framework.junit5.Start;
+import org.testfx.util.WaitForAsyncUtils;
+
+@ExtendWith(ApplicationExtension.class)
+class LocalLoginDialogTest {
+  private Stage owner;
+
+  @Start
+  void start(Stage stage) {
+    owner = stage;
+    stage.setScene(new Scene(new StackPane(), 320, 200));
+    stage.show();
+  }
+
+  @Test
+  @Timeout(value = 30, unit = TimeUnit.SECONDS)
+  void rejectsInvalidCredentialsAndAcceptsOfflineLogin(FxRobot robot, @TempDir Path temp)
+      throws Exception {
+    try (LocalDatabaseSession database =
+        LocalDatabaseSession.open(temp.resolve("login-ui.sqlite"))) {
+      var unitOfWork = new SqliteUnitOfWork(database.connection());
+      var hasher = new Pbkdf2PasswordHasher();
+      new CreateFirstAdministratorUseCase(
+              unitOfWork,
+              new SqliteInitialSetupRepository(database.connection(), unitOfWork),
+              hasher)
+          .create(
+              new InitialAdministratorSetup(
+                  "Espaço Tucumã", "Admin Teste", "admin", "SenhaOfflineForte2026!".toCharArray()));
+      LoginUseCase login =
+          new LoginUseCase(
+              unitOfWork,
+              new SqliteLocalCredentialRepository(database.connection(), unitOfWork),
+              new SqliteLoginAttemptRepository(database.connection(), unitOfWork),
+              hasher,
+              new SessionContext());
+      CompletableFuture<
+              Optional<br.com.espacotucuma.desktop.application.identity.AuthenticatedSession>>
+          result = new CompletableFuture<>();
+      Platform.runLater(() -> result.complete(LocalLoginDialog.show(owner, login)));
+      WaitForAsyncUtils.waitFor(
+          5,
+          TimeUnit.SECONDS,
+          () ->
+              robot
+                  .lookup("#login")
+                  .tryQuery()
+                  .map(node -> node.getScene() != null && node.getScene().getWindow().isShowing())
+                  .orElse(false));
+
+      robot.interact(
+          () -> {
+            robot.lookup("#login").queryTextInputControl().setText("admin");
+            robot.lookup("#password").queryTextInputControl().setText("senha errada");
+            robot.lookup("Entrar").queryButton().fire();
+          });
+      WaitForAsyncUtils.waitForFxEvents();
+      assertEquals(
+          "Login ou senha inválidos.", robot.lookup("#loginMessage").queryLabeled().getText());
+
+      robot.interact(
+          () -> {
+            robot.lookup("#password").queryTextInputControl().setText("SenhaOfflineForte2026!");
+            robot.lookup("Entrar").queryButton().fire();
+          });
+      assertTrue(result.get(5, TimeUnit.SECONDS).isPresent());
+    }
+  }
+}
