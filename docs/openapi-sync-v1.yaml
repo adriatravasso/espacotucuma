@@ -98,7 +98,6 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/BackupResponse' }
-        '501': { $ref: '#/components/responses/ApiError' }
         default: { $ref: '#/components/responses/ApiError' }
   /sync/backups:
     get:
