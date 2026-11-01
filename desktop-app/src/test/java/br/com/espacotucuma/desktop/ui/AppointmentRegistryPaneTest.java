@@ -336,7 +336,9 @@ class AppointmentRegistryPaneTest {
       WaitForAsyncUtils.waitFor(
           8,
           TimeUnit.SECONDS,
-          () -> robot.lookup("#receivableState").queryLabeled().getText().contains("QUITADO"));
+          () ->
+              robot.lookup("#receivableState").queryLabeled().getText().contains("QUITADO")
+                  && robot.lookup("#paymentHistory").queryTableView().getItems().size() == 2);
       assertEquals(2, robot.lookup("#paymentHistory").queryTableView().getItems().size());
       assertTrue(robot.lookup("#receivableOutstanding").queryLabeled().getText().contains("0,00"));
       Platform.runLater(() -> robot.lookup("Fechar").queryButton().fire());
