@@ -24,6 +24,7 @@
         <spring-boot.version>3.5.16</spring-boot.version>
         <junit-jupiter.version>5.12.2</junit-jupiter.version>
         <archunit.version>1.5.1</archunit.version>
+        <testfx.version>4.0.18</testfx.version>
         <javafx-maven-plugin.version>0.0.8</javafx-maven-plugin.version>
         <maven-compiler-plugin.version>3.14.1</maven-compiler-plugin.version>
         <maven-surefire-plugin.version>3.5.4</maven-surefire-plugin.version>
@@ -64,6 +65,12 @@
                 <groupId>com.tngtech.archunit</groupId>
                 <artifactId>archunit</artifactId>
                 <version>${archunit.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.testfx</groupId>
+                <artifactId>testfx-junit5</artifactId>
+                <version>${testfx.version}</version>
+                <scope>test</scope>
             </dependency>
             <dependency>
                 <groupId>org.xerial</groupId>
