@@ -44,7 +44,12 @@ class InitialAdministratorSetupTest {
           new SqliteInitialSetupRepository(database.connection(), unitOfWork);
       Pbkdf2PasswordHasher hasher = new Pbkdf2PasswordHasher();
       CreateFirstAdministratorUseCase useCase =
-          new CreateFirstAdministratorUseCase(unitOfWork, repository, hasher);
+          new CreateFirstAdministratorUseCase(
+              unitOfWork,
+              repository,
+              hasher,
+              new SqliteAuditRepository(database.connection(), unitOfWork),
+              java.util.UUID.randomUUID());
       char[] password = "SenhaForteOffline2026!".toCharArray();
 
       assertTrue(useCase.isSetupRequired());
@@ -105,7 +110,12 @@ class InitialAdministratorSetupTest {
       SqliteInitialSetupRepository repository =
           new SqliteInitialSetupRepository(database.connection(), unitOfWork);
       CreateFirstAdministratorUseCase useCase =
-          new CreateFirstAdministratorUseCase(unitOfWork, repository, new Pbkdf2PasswordHasher());
+          new CreateFirstAdministratorUseCase(
+              unitOfWork,
+              repository,
+              new Pbkdf2PasswordHasher(),
+              new SqliteAuditRepository(database.connection(), unitOfWork),
+              java.util.UUID.randomUUID());
 
       assertThrows(
           IllegalArgumentException.class,
@@ -134,6 +144,35 @@ class InitialAdministratorSetupTest {
   }
 
   @Test
+  void failedInitialAuditRollsBackEstablishmentAndAdministrator(@TempDir Path temp)
+      throws Exception {
+    try (LocalDatabaseSession database =
+        LocalDatabaseSession.open(temp.resolve("audit-failure.sqlite"))) {
+      SqliteUnitOfWork unitOfWork = new SqliteUnitOfWork(database.connection());
+      try (Statement statement = database.connection().createStatement()) {
+        statement.execute(
+            "CREATE TRIGGER reject_audit BEFORE INSERT ON evento_auditoria "
+                + "BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END");
+      }
+      CreateFirstAdministratorUseCase useCase =
+          new CreateFirstAdministratorUseCase(
+              unitOfWork,
+              new SqliteInitialSetupRepository(database.connection(), unitOfWork),
+              new Pbkdf2PasswordHasher(),
+              new SqliteAuditRepository(database.connection(), unitOfWork),
+              java.util.UUID.randomUUID());
+
+      assertThrows(
+          IllegalStateException.class,
+          () -> useCase.create(setup("SenhaForteOffline2026!".toCharArray())));
+      assertEquals(0, scalarInt(database.connection(), "SELECT count(*) FROM estabelecimento"));
+      assertEquals(0, scalarInt(database.connection(), "SELECT count(*) FROM usuario"));
+      assertEquals(0, scalarInt(database.connection(), "SELECT count(*) FROM evento_auditoria"));
+      assertTrue(database.connection().getAutoCommit());
+    }
+  }
+
+  @Test
   void localPasswordChangeRequiresTheCurrentCredentialAndWorksOffline(@TempDir Path temp)
       throws Exception {
     try (LocalDatabaseSession database =
@@ -142,7 +181,12 @@ class InitialAdministratorSetupTest {
       SqliteInitialSetupRepository setupRepository =
           new SqliteInitialSetupRepository(database.connection(), unitOfWork);
       Pbkdf2PasswordHasher hasher = new Pbkdf2PasswordHasher();
-      new CreateFirstAdministratorUseCase(unitOfWork, setupRepository, hasher)
+      new CreateFirstAdministratorUseCase(
+              unitOfWork,
+              setupRepository,
+              hasher,
+              new SqliteAuditRepository(database.connection(), unitOfWork),
+              java.util.UUID.randomUUID())
           .create(setup("SenhaAtualLocal2026!".toCharArray()));
       ChangeLocalPasswordUseCase changePassword =
           new ChangeLocalPasswordUseCase(

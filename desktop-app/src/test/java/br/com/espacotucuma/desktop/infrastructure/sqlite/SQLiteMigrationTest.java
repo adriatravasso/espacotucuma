@@ -36,10 +36,14 @@ class SQLiteMigrationTest {
       assertTrue(tableExists(connection, "recebimento"));
       assertTrue(tableExists(connection, "movimento_estoque"));
       assertTrue(tableExists(connection, "evento_auditoria"));
+      assertTrue(triggerExists(connection, "trg_evento_auditoria_no_update"));
+      assertTrue(triggerExists(connection, "trg_evento_auditoria_no_delete"));
+      assertTrue(triggerExists(connection, "trg_tentativa_login_no_update"));
+      assertTrue(triggerExists(connection, "trg_tentativa_login_no_delete"));
       assertTrue(tableExists(connection, "tentativa_login"));
       assertTrue(tableExists(connection, "operacao_pendente"));
       assertEquals(
-          4, scalarInt(connection, "SELECT count(*) FROM flyway_schema_history WHERE success = 1"));
+          5, scalarInt(connection, "SELECT count(*) FROM flyway_schema_history WHERE success = 1"));
     }
   }
 
@@ -59,7 +63,7 @@ class SQLiteMigrationTest {
               database.connection(),
               "SELECT count(*) FROM cliente WHERE id = '" + CLIENT_ID + "'"));
       assertEquals(
-          4,
+          5,
           scalarInt(
               database.connection(),
               "SELECT count(*) FROM flyway_schema_history WHERE success = 1"));
@@ -163,6 +167,17 @@ class SQLiteMigrationTest {
         connection.prepareStatement(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?"); ) {
       statement.setString(1, tableName);
+      try (ResultSet result = statement.executeQuery()) {
+        return result.next();
+      }
+    }
+  }
+
+  private boolean triggerExists(Connection connection, String triggerName) throws SQLException {
+    try (PreparedStatement statement =
+        connection.prepareStatement(
+            "SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = ?")) {
+      statement.setString(1, triggerName);
       try (ResultSet result = statement.executeQuery()) {
         return result.next();
       }

@@ -48,7 +48,10 @@ class InitialAdministratorDialogTest {
           new CreateFirstAdministratorUseCase(
               unitOfWork,
               new SqliteInitialSetupRepository(database.connection(), unitOfWork),
-              new Pbkdf2PasswordHasher());
+              new Pbkdf2PasswordHasher(),
+              new br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteAuditRepository(
+                  database.connection(), unitOfWork),
+              java.util.UUID.randomUUID());
       CompletableFuture<Boolean> dialogResult = new CompletableFuture<>();
       Platform.runLater(
           () -> dialogResult.complete(InitialAdministratorDialog.showAndCreate(owner, useCase)));

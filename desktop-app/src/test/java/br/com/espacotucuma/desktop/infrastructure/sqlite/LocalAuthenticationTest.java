@@ -52,6 +52,11 @@ class LocalAuthenticationTest {
           scalarInt(
               database,
               "SELECT count(*) FROM pragma_table_info('tentativa_login') WHERE name LIKE '%senha%'"));
+      assertThrows(
+          java.sql.SQLException.class,
+          () -> execute(database, "UPDATE tentativa_login SET motivo = 'AUTENTICADO'"));
+      assertThrows(
+          java.sql.SQLException.class, () -> execute(database, "DELETE FROM tentativa_login"));
     }
   }
 
@@ -92,7 +97,8 @@ class LocalAuthenticationTest {
               new SqliteClientRepository(database.connection(), fixture.unitOfWork),
               new SqliteOutboxRepository(database.connection(), fixture.unitOfWork),
               UUID.randomUUID(),
-              fixture.authorization);
+              fixture.authorization,
+              new SqliteAuditRepository(database.connection(), fixture.unitOfWork));
 
       assertThrows(AuthorizationException.class, () -> useCase.register("Cliente sintética", null));
       assertEquals(0, scalarInt(database, "SELECT count(*) FROM cliente"));
@@ -101,7 +107,6 @@ class LocalAuthenticationTest {
               UUID.randomUUID(), "Profissional", "profissional", UserRole.PROFISSIONAL));
       assertThrows(
           AuthorizationException.class, () -> useCase.register("Cliente sem acesso", null));
-      fixture.login.login("admin", ADMIN_PASSWORD.toCharArray());
       fixture.login.login("admin", ADMIN_PASSWORD.toCharArray());
       useCase.register("Cliente sintética", null);
       assertEquals(1, scalarInt(database, "SELECT count(*) FROM cliente"));
@@ -114,16 +119,32 @@ class LocalAuthenticationTest {
       Fixture fixture = fixture(database);
       var admin = fixture.login.login("admin", ADMIN_PASSWORD.toCharArray()).orElseThrow();
       UUID adminId = admin.user().id();
-      assertThrows(IllegalArgumentException.class, () -> fixture.deactivate.deactivate(adminId));
       assertThrows(
           IllegalArgumentException.class,
-          () -> fixture.changeRole.change(adminId, UserRole.RECEPCAO));
-      fixture.changeRole.change(fixture.receptionId, UserRole.PROFISSIONAL);
+          () -> fixture.deactivate.deactivate(adminId, "Teste sintético"));
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> fixture.changeRole.change(adminId, UserRole.RECEPCAO, "Teste sintético"));
+      fixture.changeRole.change(
+          fixture.receptionId, UserRole.PROFISSIONAL, "Ajuste de função da equipe");
+      assertEquals(
+          "Ajuste de função da equipe",
+          scalarString(
+              database, "SELECT motivo FROM evento_auditoria WHERE acao = 'PERFIL_ALTERADO'"));
+      assertEquals(
+          "{\"perfilAnterior\":\"RECEPCAO\",\"perfilNovo\":\"PROFISSIONAL\"}",
+          scalarString(
+              database,
+              "SELECT detalhes_json FROM evento_auditoria WHERE acao = 'PERFIL_ALTERADO'"));
       assertEquals(
           "PROFISSIONAL",
           scalarString(
               database, "SELECT perfil FROM usuario WHERE id = '" + fixture.receptionId + "'"));
-      fixture.deactivate.deactivate(fixture.receptionId);
+      fixture.deactivate.deactivate(fixture.receptionId, "Conta encerrada a pedido da equipe");
+      assertEquals(
+          "CONTA_DESATIVADA",
+          scalarString(
+              database, "SELECT acao FROM evento_auditoria WHERE acao = 'CONTA_DESATIVADA'"));
       assertEquals(
           0,
           scalarInt(
@@ -139,9 +160,37 @@ class LocalAuthenticationTest {
       fixture.login.login("recepcao", RECEPTION_PASSWORD.toCharArray()).orElseThrow();
       assertThrows(
           AuthorizationException.class,
-          () -> fixture.changeRole.change(fixture.receptionId, UserRole.ADMINISTRADOR));
+          () ->
+              fixture.changeRole.change(
+                  fixture.receptionId, UserRole.ADMINISTRADOR, "Alteração não autorizada"));
       assertThrows(
-          AuthorizationException.class, () -> fixture.deactivate.deactivate(fixture.receptionId));
+          AuthorizationException.class,
+          () -> fixture.deactivate.deactivate(fixture.receptionId, "Desativação não autorizada"));
+    }
+  }
+
+  @Test
+  void userChangeRollsBackWhenItsAuditEventCannotBeRecorded(@TempDir Path temp) throws Exception {
+    try (LocalDatabaseSession database =
+        LocalDatabaseSession.open(temp.resolve("user-audit.sqlite"))) {
+      Fixture fixture = fixture(database);
+      fixture.login.login("admin", ADMIN_PASSWORD.toCharArray()).orElseThrow();
+      try (var statement = database.connection().createStatement()) {
+        statement.execute(
+            "CREATE TRIGGER reject_audit BEFORE INSERT ON evento_auditoria "
+                + "BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END");
+      }
+
+      assertThrows(
+          RuntimeException.class,
+          () ->
+              fixture.changeRole.change(
+                  fixture.receptionId, UserRole.PROFISSIONAL, "Ajuste de função da equipe"));
+      assertEquals(
+          "RECEPCAO",
+          scalarString(
+              database, "SELECT perfil FROM usuario WHERE id = '" + fixture.receptionId + "'"));
+      assertEquals(1, scalarInt(database, "SELECT count(*) FROM evento_auditoria"));
     }
   }
 
@@ -149,7 +198,11 @@ class LocalAuthenticationTest {
     SqliteUnitOfWork unitOfWork = new SqliteUnitOfWork(database.connection());
     Pbkdf2PasswordHasher hasher = new Pbkdf2PasswordHasher();
     new CreateFirstAdministratorUseCase(
-            unitOfWork, new SqliteInitialSetupRepository(database.connection(), unitOfWork), hasher)
+            unitOfWork,
+            new SqliteInitialSetupRepository(database.connection(), unitOfWork),
+            hasher,
+            new SqliteAuditRepository(database.connection(), unitOfWork),
+            UUID.fromString("b75c9fa5-8844-46b5-9756-0042c8a00e70"))
         .create(
             new InitialAdministratorSetup(
                 "Espaço Tucumã", "Admin Teste", "admin", ADMIN_PASSWORD.toCharArray()));
@@ -188,8 +241,18 @@ class LocalAuthenticationTest {
             new SqliteLoginAttemptRepository(database.connection(), unitOfWork),
             hasher,
             sessions),
-        new DeactivateUserUseCase(unitOfWork, users, authorization, sessions),
-        new ChangeUserRoleUseCase(unitOfWork, users, authorization, sessions),
+        new DeactivateUserUseCase(
+            unitOfWork,
+            users,
+            authorization,
+            new SqliteAuditRepository(database.connection(), unitOfWork),
+            UUID.fromString("b75c9fa5-8844-46b5-9756-0042c8a00e70")),
+        new ChangeUserRoleUseCase(
+            unitOfWork,
+            users,
+            authorization,
+            new SqliteAuditRepository(database.connection(), unitOfWork),
+            UUID.fromString("b75c9fa5-8844-46b5-9756-0042c8a00e70")),
         receptionId);
   }
 
@@ -204,6 +267,12 @@ class LocalAuthenticationTest {
     try (var statement = database.connection().createStatement();
         var result = statement.executeQuery(sql)) {
       return result.next() ? result.getString(1) : null;
+    }
+  }
+
+  private void execute(LocalDatabaseSession database, String sql) throws Exception {
+    try (var statement = database.connection().createStatement()) {
+      statement.executeUpdate(sql);
     }
   }
 
