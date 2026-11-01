@@ -54,8 +54,8 @@ public final class SqliteUnitOfWork implements UnitOfWork {
 
   synchronized <T> T read(Supplier<T> query) {
     Objects.requireNonNull(query, "query");
-    if (executing) {
-      throw new IllegalStateException("A consulta não pode ocorrer durante uma transação local.");
+    if (executing && transactionOwner != Thread.currentThread()) {
+      throw new IllegalStateException("A consulta não pode acessar a transação de outra operação.");
     }
     return query.get();
   }

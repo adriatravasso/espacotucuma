@@ -27,6 +27,12 @@ public final class TucumaDesktopApplication extends Application {
       return;
     }
 
+    if (runtime.createFirstAdministrator().isSetupRequired()
+        && !InitialAdministratorDialog.showAndCreate(stage, runtime.createFirstAdministrator())) {
+      Platform.exit();
+      return;
+    }
+
     BorderPane root = new BorderPane(new Label("Sistema de Gestão do Espaço Tucumã"));
     stage.setTitle("Tucumã — Gestão");
     stage.setScene(new Scene(root, 900, 600));

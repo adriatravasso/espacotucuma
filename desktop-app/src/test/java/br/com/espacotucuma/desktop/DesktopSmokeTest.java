@@ -3,6 +3,9 @@ package br.com.espacotucuma.desktop;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import br.com.espacotucuma.desktop.application.config.DesktopEnvironment;
+import br.com.espacotucuma.desktop.application.config.EnvironmentProfile;
+import br.com.espacotucuma.desktop.application.identity.InitialAdministratorSetup;
 import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -16,6 +19,19 @@ class DesktopSmokeTest {
 
   @Test
   void opensAndClosesTheDesktopWithoutRemoteServices(@TempDir Path tempDirectory) throws Exception {
+    DesktopEnvironment environment =
+        new DesktopEnvironment(EnvironmentProfile.TEST, tempDirectory.resolve("test"));
+    try (DesktopRuntime runtime = DesktopRuntime.open(environment)) {
+      runtime
+          .createFirstAdministrator()
+          .create(
+              new InitialAdministratorSetup(
+                  "Espaço Tucumã",
+                  "Admin de teste",
+                  "admin",
+                  "SenhaOfflineForte2026!".toCharArray()));
+    }
+
     String javaExecutable =
         Path.of(System.getProperty("java.home"), "bin", isWindows() ? "java.exe" : "java")
             .toString();
