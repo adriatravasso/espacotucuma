@@ -1,7 +1,11 @@
 package br.com.espacotucuma.desktop.ui;
 
+import br.com.espacotucuma.desktop.application.commission.CommissionService;
+import br.com.espacotucuma.desktop.application.commission.MaintainCommissionRuleUseCase;
 import br.com.espacotucuma.desktop.application.identity.AuthorizationService;
 import br.com.espacotucuma.desktop.application.identity.Permission;
+import br.com.espacotucuma.desktop.application.port.commission.CommissionRuleRepository;
+import br.com.espacotucuma.desktop.application.port.professional.ProfessionalRepository;
 import br.com.espacotucuma.desktop.application.port.service.ServiceRepository;
 import br.com.espacotucuma.desktop.application.service.BeautyService;
 import br.com.espacotucuma.desktop.application.service.MaintainServiceUseCase;
@@ -48,14 +52,34 @@ public final class ServiceCatalogPane extends javafx.scene.layout.BorderPane {
   private final CheckBox showInactive = new CheckBox("Mostrar inativos");
   private final Button history = new Button("Histórico");
   private final Button deactivate = new Button("Inativar");
+  private final Button commissionPreview = new Button("Comissão prevista");
+  private final CommissionService commissions;
+  private final MaintainCommissionRuleUseCase maintainCommissionRule;
+  private final CommissionRuleRepository commissionRules;
+  private final ProfessionalRepository professionals;
 
   public ServiceCatalogPane(
       ServiceRepository services,
       MaintainServiceUseCase maintain,
       AuthorizationService authorization) {
+    this(services, maintain, authorization, null, null, null, null);
+  }
+
+  public ServiceCatalogPane(
+      ServiceRepository services,
+      MaintainServiceUseCase maintain,
+      AuthorizationService authorization,
+      CommissionService commissions,
+      MaintainCommissionRuleUseCase maintainCommissionRule,
+      CommissionRuleRepository commissionRules,
+      ProfessionalRepository professionals) {
     this.services = Objects.requireNonNull(services, "services");
     this.maintain = Objects.requireNonNull(maintain, "maintain");
     this.authorization = Objects.requireNonNull(authorization, "authorization");
+    this.commissions = commissions;
+    this.maintainCommissionRule = maintainCommissionRule;
+    this.commissionRules = commissionRules;
+    this.professionals = professionals;
     table = createTable();
     showInactive.setId("serviceShowInactive");
     showInactive.setOnAction(
@@ -65,11 +89,14 @@ public final class ServiceCatalogPane extends javafx.scene.layout.BorderPane {
         });
     history.setId("serviceHistory");
     history.setDisable(true);
+    commissionPreview.setId("serviceCommissionPreview");
+    commissionPreview.setDisable(true);
     deactivate.setId("serviceDeactivate");
     deactivate.setDisable(true);
     table.addSelectionListener(
         selected -> {
           history.setDisable(selected == null);
+          commissionPreview.setDisable(selected == null || commissions == null);
           deactivate.setDisable(
               selected == null
                   || !selected.active()
@@ -78,12 +105,14 @@ public final class ServiceCatalogPane extends javafx.scene.layout.BorderPane {
     table.setEditAvailability(BeautyService::active);
     history.setOnAction(event -> showHistory(table.selectedItem()));
     deactivate.setOnAction(event -> confirmDeactivate(table.selectedItem()));
+    commissionPreview.setOnAction(event -> showCommissionPreview(table.selectedItem()));
     HBox actions =
         new HBox(
             6,
             new Label("Catálogo de serviços e preços vigentes"),
             showInactive,
             history,
+            commissionPreview,
             deactivate);
     actions.setPadding(new Insets(8));
     setTop(actions);
@@ -297,6 +326,25 @@ public final class ServiceCatalogPane extends javafx.scene.layout.BorderPane {
     dialog.getDialogPane().setPrefSize(740, 360);
     TucumaTheme.apply(dialog.getDialogPane());
     dialog.showAndWait();
+  }
+
+  private void showCommissionPreview(BeautyService service) {
+    if (service == null
+        || commissions == null
+        || maintainCommissionRule == null
+        || commissionRules == null
+        || professionals == null) return;
+    authorization.require(Permission.SERVICE_READ);
+    Window owner = getScene() == null ? null : getScene().getWindow();
+    new CommissionPreviewDialog(
+            owner,
+            service,
+            commissions,
+            maintainCommissionRule,
+            commissionRules,
+            professionals,
+            authorization)
+        .showAndWait();
   }
 
   private Money parseMoney(String value) {
