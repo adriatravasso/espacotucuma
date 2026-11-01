@@ -199,7 +199,7 @@ class PagedTablePaneTest {
               robot.capture((javafx.scene.Node) robot.lookup(".dialog-pane").query()).getImage(),
               previewScreenshot);
       assertTrue(Files.size(previewScreenshot) > 0);
-      robot.interact(() -> robot.lookup("Fechar").queryButton().fire());
+      robot.interact(() -> robot.lookup("#printPreviewClose").queryButton().fire());
     }
   }
 

@@ -28,7 +28,9 @@ public final class TucumaPrintPreviewDialog extends Dialog<Void> {
     setHeaderText("Prévia de impressão");
     if (owner != null) initOwner(owner);
     ButtonType print = new ButtonType("Imprimir", ButtonBar.ButtonData.OTHER);
-    getDialogPane().getButtonTypes().addAll(print, ButtonType.CLOSE);
+    ButtonType close = new ButtonType("Fechar", ButtonBar.ButtonData.CANCEL_CLOSE);
+    getDialogPane().getButtonTypes().addAll(print, close);
+    getDialogPane().lookupButton(close).setId("printPreviewClose");
 
     Label identity = new Label("ESPAÇO TUCUMÃ — SISTEMA DE GESTÃO");
     identity.setId("printIdentity");

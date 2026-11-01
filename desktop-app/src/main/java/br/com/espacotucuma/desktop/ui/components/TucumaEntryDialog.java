@@ -43,7 +43,8 @@ public final class TucumaEntryDialog extends Dialog<Map<String, String>> {
     if (owner != null) initOwner(owner);
 
     ButtonType save = new ButtonType("Salvar", ButtonBar.ButtonData.OK_DONE);
-    getDialogPane().getButtonTypes().addAll(save, ButtonType.CANCEL);
+    ButtonType cancel = new ButtonType("Cancelar", ButtonBar.ButtonData.CANCEL_CLOSE);
+    getDialogPane().getButtonTypes().addAll(save, cancel);
     GridPane form = new GridPane();
     form.setAlignment(Pos.CENTER_LEFT);
     form.setHgap(10);
@@ -88,7 +89,8 @@ public final class TucumaEntryDialog extends Dialog<Map<String, String>> {
             saving = true;
           }
         });
-    Node cancelButton = getDialogPane().lookupButton(ButtonType.CANCEL);
+    Node cancelButton = getDialogPane().lookupButton(cancel);
+    cancelButton.setId("formCancel");
     cancelButton.addEventFilter(
         ActionEvent.ACTION,
         event -> {

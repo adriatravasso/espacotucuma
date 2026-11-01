@@ -104,7 +104,7 @@ class TucumaEntryDialogTest {
   @Timeout(30)
   void cancelsUntouchedFormWithoutAnUnnecessaryConfirmation(FxRobot robot) throws Exception {
     CompletableFuture<Optional<Map<String, String>>> cancelled = openForm(robot, Map.of());
-    javafx.scene.control.Button cancel = robot.lookup("Cancelar").queryButton();
+    javafx.scene.control.Button cancel = robot.lookup("#formCancel").queryButton();
     Platform.runLater(cancel::fire);
     assertTrue(cancelled.get(5, TimeUnit.SECONDS).isEmpty());
     assertTrue(robot.lookup(".alert").tryQuery().isEmpty());
