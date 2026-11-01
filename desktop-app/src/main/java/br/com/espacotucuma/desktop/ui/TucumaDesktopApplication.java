@@ -59,7 +59,8 @@ public final class TucumaDesktopApplication extends Application {
             runtime.services(),
             runtime.authorization(),
             runtime.maintainAttendance(),
-            runtime.prepaidPackages());
+            runtime.prepaidPackages(),
+            runtime.registerPayment());
     shell =
         new TucumaMainShell(
             runtime::protectionStatus,
