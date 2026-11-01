@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -11,7 +12,10 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.sqlite.SQLiteErrorCode;
+import org.sqlite.SQLiteException;
 
 class SQLiteMigrationTest {
 
@@ -164,6 +168,35 @@ class SQLiteMigrationTest {
 
       assertEquals(0, scalarInt(connection, "SELECT count(*) FROM cliente"));
       assertEquals(0, scalarInt(connection, "SELECT count(*) FROM agendamento"));
+    }
+  }
+
+  @Test
+  @Timeout(30)
+  void sqliteFullConditionRejectsNewDataAndPreservesCommittedRows(@TempDir Path temp)
+      throws Exception {
+    Path databaseFile = temp.resolve("disk-full.sqlite");
+    try (LocalDatabaseSession database = LocalDatabaseSession.open(databaseFile);
+        Statement statement = database.connection().createStatement()) {
+      statement.executeUpdate("CREATE TABLE test_disk_capacity (value BLOB)");
+      statement.executeUpdate("INSERT INTO test_disk_capacity VALUES (X'01')");
+      long pageLimit = scalarInt(database.connection(), "PRAGMA page_count") + 1L;
+      statement.execute("PRAGMA max_page_count=" + pageLimit);
+
+      SQLiteException failure =
+          assertThrows(
+              SQLiteException.class,
+              () ->
+                  statement.executeUpdate(
+                      "INSERT INTO test_disk_capacity VALUES (randomblob(1048576))"));
+
+      assertEquals(SQLiteErrorCode.SQLITE_FULL, failure.getResultCode());
+      assertTrue(Files.isRegularFile(databaseFile));
+      assertEquals(1, scalarInt(database.connection(), "SELECT COUNT(*) FROM test_disk_capacity"));
+      try (ResultSet result = statement.executeQuery("PRAGMA quick_check")) {
+        assertTrue(result.next());
+        assertEquals("ok", result.getString(1));
+      }
     }
   }
 

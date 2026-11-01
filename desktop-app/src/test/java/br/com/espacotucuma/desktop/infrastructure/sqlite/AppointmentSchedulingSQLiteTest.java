@@ -68,6 +68,22 @@ class AppointmentSchedulingSQLiteTest {
   }
 
   @Test
+  @org.junit.jupiter.api.Timeout(30)
+  void readsDailyScheduleAfterOneThousandAppointmentsAcrossWorkingDays(@TempDir Path temp)
+      throws Exception {
+    try (Fixture fixture = new Fixture(temp.resolve("schedule-volume.sqlite"))) {
+      fixture.seedAppointmentVolume(1000);
+      long started = System.nanoTime();
+      var appointments = fixture.appointments.findForDay(MONDAY, fixture.professionalId);
+      long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+
+      assertEquals(10, appointments.size());
+      assertTrue(elapsedMillis < 2500, "Daily schedule query took " + elapsedMillis + " ms");
+      System.out.println("TUC53_APPOINTMENTS_QUERY_MS=" + elapsedMillis);
+    }
+  }
+
+  @Test
   void overlappingSlotsAreScopedToTheProfessional(@TempDir Path temp) throws Exception {
     try (Fixture fixture = new Fixture(temp.resolve("schedule-professional-scope.sqlite"))) {
       fixture.createAt(9, 0);
@@ -924,6 +940,50 @@ class AppointmentSchedulingSQLiteTest {
         insert.setString(3, NOW.toString());
         insert.executeUpdate();
       }
+    }
+
+    void seedAppointmentVolume(int total) throws Exception {
+      database.connection().setAutoCommit(false);
+      try (PreparedStatement insert =
+          database
+              .connection()
+              .prepareStatement(
+                  "INSERT INTO agendamento (id,cliente_id,profissional_id,servico_id,inicio_em_utc,"
+                      + "fim_em_utc,estado,observacao,criado_por_usuario_id,criado_em_utc,atualizado_em_utc) "
+                      + "VALUES (?,?,?,?,?,?,'AGENDADO',NULL,?,?,?)")) {
+        int inserted = 0;
+        for (int dayOffset = 0; dayOffset < 150 && inserted < total; dayOffset++) {
+          LocalDate day = MONDAY.plusDays(dayOffset);
+          if (day.getDayOfWeek().getValue() > 5) continue;
+          for (int slot = 0; slot < 10 && inserted < total; slot++) {
+            LocalDateTime startsAt = day.atTime(9, 0).plusMinutes(slot * 30L);
+            LocalDateTime endsAt = startsAt.plusMinutes(30);
+            String createdAt = utc(startsAt);
+            insert.setString(1, UUID.randomUUID().toString());
+            insert.setString(2, clientId.toString());
+            insert.setString(3, professionalId.toString());
+            insert.setString(4, serviceId.toString());
+            insert.setString(5, utc(startsAt));
+            insert.setString(6, utc(endsAt));
+            insert.setString(7, adminId.toString());
+            insert.setString(8, createdAt);
+            insert.setString(9, createdAt);
+            insert.addBatch();
+            inserted++;
+          }
+        }
+        insert.executeBatch();
+        database.connection().commit();
+      } finally {
+        database.connection().setAutoCommit(true);
+      }
+      if (scalar("SELECT COUNT(*) FROM agendamento") != total) {
+        throw new IllegalStateException("O fixture de volume não criou a quantidade esperada.");
+      }
+    }
+
+    private String utc(LocalDateTime localTime) {
+      return localTime.atZone(ZoneId.of("America/Manaus")).toInstant().toString();
     }
 
     br.com.espacotucuma.desktop.application.scheduling.Appointment createAt(int hour, int minute) {

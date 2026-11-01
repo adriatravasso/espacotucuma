@@ -9,13 +9,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import br.com.espacotucuma.desktop.application.config.DesktopEnvironment;
 import br.com.espacotucuma.desktop.application.config.DesktopPreferences;
 import br.com.espacotucuma.desktop.application.config.EnvironmentProfile;
+import br.com.espacotucuma.desktop.application.identity.InitialAdministratorSetup;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.LocalDatabaseSession;
 import br.com.espacotucuma.desktop.ui.TucumaDesktopApplication;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.DriverManager;
 import java.sql.SQLException;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 
 class DesktopStartupTest {
@@ -33,6 +36,39 @@ class DesktopStartupTest {
         assertTrue(logFiles.anyMatch(Files::isRegularFile));
       }
       assertTrue(Files.isRegularFile(environment.databaseFile()));
+    }
+  }
+
+  @Test
+  @Timeout(30)
+  void measuresFirstStartupAndLocalClientRegistration(@TempDir Path temp) throws Exception {
+    DesktopEnvironment environment = environment(temp);
+    long startupStarted = System.nanoTime();
+    try (DesktopRuntime runtime = DesktopRuntime.open(environment)) {
+      long startupMillis =
+          java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startupStarted);
+      runtime
+          .createFirstAdministrator()
+          .create(
+              new InitialAdministratorSetup(
+                  "Espaço Tucumã",
+                  "Admin de teste",
+                  "admin",
+                  "SenhaTesteOffline2026!".toCharArray()));
+      assertTrue(
+          runtime.login().login("admin", "SenhaTesteOffline2026!".toCharArray()).isPresent());
+
+      long registrationStarted = System.nanoTime();
+      runtime.registerClient().register("Cliente de desempenho", "92900000002");
+      long registrationMillis =
+          java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(
+              System.nanoTime() - registrationStarted);
+
+      assertTrue(startupMillis < 10000, "Cold start took " + startupMillis + " ms");
+      assertTrue(
+          registrationMillis < 2000, "Client registration took " + registrationMillis + " ms");
+      System.out.println("TUC53_COLD_START_MS=" + startupMillis);
+      System.out.println("TUC53_CLIENT_REGISTRATION_MS=" + registrationMillis);
     }
   }
 
@@ -94,6 +130,34 @@ class DesktopStartupTest {
     assertThrows(SQLException.class, () -> LocalDatabaseSession.open(databaseFile));
 
     assertArrayEquals(originalContents, Files.readAllBytes(databaseFile));
+  }
+
+  @Test
+  @Timeout(20)
+  void lockedDatabaseIsDiagnosedPreservedAndCanBeReopened(@TempDir Path temp) throws Exception {
+    Path databaseFile = temp.resolve("locked.sqlite");
+    try (LocalDatabaseSession database = LocalDatabaseSession.open(databaseFile);
+        var statement = database.connection().createStatement()) {
+      statement.executeUpdate("CREATE TABLE test_preserved_data (value TEXT NOT NULL)");
+      statement.executeUpdate("INSERT INTO test_preserved_data VALUES ('confirmed-before-lock')");
+    }
+
+    try (var blocker = DriverManager.getConnection("jdbc:sqlite:" + databaseFile);
+        var statement = blocker.createStatement()) {
+      statement.execute("BEGIN EXCLUSIVE");
+      Exception failure =
+          assertThrows(Exception.class, () -> LocalDatabaseSession.open(databaseFile));
+      String guidance = TucumaDesktopApplication.startupErrorMessage(failure);
+      assertTrue(guidance.contains("não foi substituído nem apagado"));
+      assertTrue(Files.isRegularFile(databaseFile));
+    }
+
+    try (LocalDatabaseSession reopened = LocalDatabaseSession.open(databaseFile);
+        var statement = reopened.connection().createStatement();
+        var result = statement.executeQuery("SELECT value FROM test_preserved_data")) {
+      assertTrue(result.next());
+      assertEquals("confirmed-before-lock", result.getString(1));
+    }
   }
 
   @Test

@@ -26,6 +26,7 @@ import javafx.scene.input.KeyEvent;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
+import org.sqlite.SQLiteException;
 
 /** Compact local-data table with incremental search, filter, ordering, and explicit pagination. */
 public final class PagedTablePane<T> extends BorderPane {
@@ -170,7 +171,9 @@ public final class PagedTablePane<T> extends BorderPane {
                 loadPage("Registro salvo localmente.");
               }
             } catch (RuntimeException failure) {
-              setMessage("Não foi possível concluir a operação local. Tente novamente.");
+              setMessage(
+                  operationFailureMessage(
+                      failure, "Não foi possível concluir a operação local. Tente novamente."));
             }
           });
     }
@@ -193,7 +196,9 @@ public final class PagedTablePane<T> extends BorderPane {
                   loadPage("Alterações salvas localmente.");
                 }
               } catch (RuntimeException failure) {
-                setMessage("Não foi possível concluir a operação local. Tente novamente.");
+                setMessage(
+                    operationFailureMessage(
+                        failure, "Não foi possível concluir a operação local. Tente novamente."));
               }
             }
           });
@@ -330,7 +335,10 @@ public final class PagedTablePane<T> extends BorderPane {
                         pageInfo.setText("Dados indisponíveis");
                         previous.setDisable(true);
                         next.setDisable(true);
-                        setMessage("Não foi possível carregar os dados locais. Tente novamente.");
+                        setMessage(
+                            operationFailureMessage(
+                                failure,
+                                "Não foi possível carregar os dados locais. Tente novamente."));
                         return;
                       }
                       pageIndex = loaded.pageIndex();
@@ -386,6 +394,25 @@ public final class PagedTablePane<T> extends BorderPane {
   private void setMessage(String text) {
     message.setText(text);
     message.setAccessibleText(text);
+  }
+
+  private static String operationFailureMessage(Throwable failure, String fallback) {
+    for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+      if (cause instanceof SQLiteException sqliteFailure) {
+        return switch (sqliteFailure.getResultCode()) {
+          case SQLITE_FULL ->
+              "O disco local está sem espaço. Libere espaço e tente novamente; o registro não foi confirmado e dados anteriores foram preservados.";
+          case SQLITE_BUSY, SQLITE_LOCKED ->
+              "O banco local está ocupado por outra operação. Aguarde e tente novamente; o registro não foi confirmado.";
+          case SQLITE_CORRUPT, SQLITE_NOTADB ->
+              "A integridade do banco local falhou. Não apague o arquivo; preserve uma cópia e use o procedimento de recuperação.";
+          case SQLITE_IOERR, SQLITE_CANTOPEN ->
+              "Falha ao acessar o arquivo do banco local. Verifique espaço, permissões e se outra instância o está usando; os dados existentes foram preservados.";
+          default -> fallback;
+        };
+      }
+    }
+    return fallback;
   }
 
   private record LoadedPage<T>(Page<T> page, int pageIndex) {}
