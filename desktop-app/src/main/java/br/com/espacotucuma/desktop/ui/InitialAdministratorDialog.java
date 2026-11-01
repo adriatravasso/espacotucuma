@@ -24,7 +24,7 @@ final class InitialAdministratorDialog {
     Dialog<Boolean> dialog = new Dialog<>();
     dialog.setTitle("Configuração inicial — Tucumã Gestão");
     dialog.setHeaderText("Defina o estabelecimento e a conta do primeiro administrador.");
-    if (owner != null) {
+    if (owner != null && owner.getScene() != null) {
       dialog.initOwner(owner);
     }
 

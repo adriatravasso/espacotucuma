@@ -72,7 +72,7 @@ class LocalLoginDialogTest {
       CompletableFuture<
               Optional<br.com.espacotucuma.desktop.application.identity.AuthenticatedSession>>
           result = new CompletableFuture<>();
-      Platform.runLater(() -> result.complete(LocalLoginDialog.show(owner, login)));
+      Platform.runLater(() -> result.complete(LocalLoginDialog.show(new Stage(), login)));
       WaitForAsyncUtils.waitFor(
           5,
           TimeUnit.SECONDS,
