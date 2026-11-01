@@ -89,7 +89,7 @@ public final class LocalDatabaseSession implements AutoCloseable {
     return databaseFile;
   }
 
-  Connection connection() {
+  public Connection connection() {
     return connection;
   }
 
