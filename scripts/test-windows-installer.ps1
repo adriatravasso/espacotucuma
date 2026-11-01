@@ -19,13 +19,16 @@ $msiOne = Join-Path $output "$appName-1.0.0.msi"
 $msiTwo = Join-Path $output "$appName-1.0.1.msi"
 $installed = $false
 $installedMsi = $null
+$installerLog = $null
 
 function Assert-NativeExit([string] $Action) {
     if ($LASTEXITCODE -ne 0) { throw "$Action terminou com código $LASTEXITCODE" }
 }
 
 function Install-Package([string] $Path) {
-    $args = @('/i', $Path, '/quiet', '/norestart')
+    $logName = [System.IO.Path]::GetFileNameWithoutExtension($Path) + '-install.log'
+    $script:installerLog = Join-Path $output $logName
+    $args = @('/i', $Path, '/quiet', '/norestart', '/l*v', $script:installerLog)
     & msiexec.exe @args
     if ($LASTEXITCODE -notin @(0, 3010)) { throw "Instalação de $Path falhou: $LASTEXITCODE" }
     $script:installed = $true
@@ -39,11 +42,14 @@ function Find-PackagedExecutable {
         (Join-Path $env:LOCALAPPDATA 'Tucumã — Gestão'),
         (Join-Path $env:LOCALAPPDATA 'Programs\EspacoTucuma'),
         (Join-Path $env:LOCALAPPDATA 'Programs\Tucumã — Gestão'),
-        $env:LOCALAPPDATA,
-        $env:ProgramFiles,
-        ${env:ProgramFiles(x86)},
-        $env:USERPROFILE
+        $env:LOCALAPPDATA
     )
+    if ($installerLog -and (Test-Path $installerLog)) {
+        $roots = @(
+            (Get-Content -LiteralPath $installerLog | Select-String -Pattern 'Property\(S\): (?:INSTALLDIR|APPLICATIONFOLDER) = (.+)$' | ForEach-Object { $_.Matches[0].Groups[1].Value.Trim() }),
+            $roots
+        )
+    }
     $uninstallRoots = @(
         'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall',
         'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall',
@@ -62,7 +68,10 @@ function Find-PackagedExecutable {
         $match = Get-ChildItem -LiteralPath $root -Filter "$appName.exe" -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($match) { return $match.FullName }
     }
-    throw "Executável instalado não localizado. Diretórios verificados: $($roots -join '; ')"
+    $installProperties = if ($installerLog -and (Test-Path $installerLog)) {
+        Get-Content -LiteralPath $installerLog | Select-String -Pattern 'Property\(S\): (?:INSTALLDIR|APPLICATIONFOLDER) = .+'
+    }
+    throw "Executável instalado não localizado. Diretórios verificados: $($roots -join '; '). Propriedades MSI: $($installProperties -join '; ')"
 }
 
 function Invoke-PackagedSmoke {
