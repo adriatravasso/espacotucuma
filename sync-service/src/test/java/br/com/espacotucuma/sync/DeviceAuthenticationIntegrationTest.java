@@ -3,12 +3,16 @@ package br.com.espacotucuma.sync;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import br.com.espacotucuma.sync.contract.SyncContract;
+import br.com.espacotucuma.sync.contract.SyncErrorCode;
+import br.com.espacotucuma.sync.contract.SyncStatusResponse;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.sql.Timestamp;
 import java.time.Instant;
@@ -80,10 +84,25 @@ class DeviceAuthenticationIntegrationTest {
     assertEquals(
         DeviceAuthenticationController.hash(token.accessToken()),
         jdbc.queryForObject("SELECT token_hash FROM token_acesso_dispositivo", String.class));
-    mockMvc
-        .perform(get("/sync/status").header("Authorization", "Bearer " + token.accessToken()))
-        .andExpect(status().isOk())
-        .andExpect(jsonPath("$.authenticated").value(true));
+    String statusResponse =
+        mockMvc
+            .perform(
+                get("/sync/status")
+                    .header("Authorization", "Bearer " + token.accessToken())
+                    .header(SyncContract.VERSION_HEADER, SyncContract.VERSION))
+            .andExpect(status().isOk())
+            .andExpect(header().string(SyncContract.VERSION_HEADER, "1"))
+            .andExpect(jsonPath("$.contractVersion").value(1))
+            .andExpect(jsonPath("$.establishmentId").value(enrollment.establishmentId().toString()))
+            .andExpect(jsonPath("$.deviceId").value(pairing.deviceId().toString()))
+            .andExpect(jsonPath("$.checkpoint").value(0))
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+    SyncStatusResponse status = objectMapper.readValue(statusResponse, SyncStatusResponse.class);
+    assertEquals(SyncContract.VERSION, status.contractVersion());
+    assertEquals(enrollment.establishmentId(), status.establishmentId());
+    assertEquals(pairing.deviceId(), status.deviceId());
 
     mockMvc
         .perform(
@@ -117,6 +136,90 @@ class DeviceAuthenticationIntegrationTest {
   }
 
   @Test
+  void versionedContractRejectsUnsupportedVersionsUnknownFieldsAndMalformedPayloads()
+      throws Exception {
+    AccessToken token =
+        issueAccessToken(pair(enrollNewEstablishment("Salão de teste").pairingCode(), "Principal"));
+    String authorization = "Bearer " + token.accessToken();
+
+    mockMvc
+        .perform(
+            get("/sync/status")
+                .header("Authorization", authorization)
+                .header(SyncContract.VERSION_HEADER, "99"))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.contractVersion").value(1))
+        .andExpect(jsonPath("$.code").value("CONTRACT_VERSION_UNSUPPORTED"))
+        .andExpect(jsonPath("$.retryable").value(false));
+
+    mockMvc
+        .perform(get("/sync/status").header("Authorization", authorization))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+
+    String validOperation =
+        "{\"operationId\":\""
+            + UUID.randomUUID()
+            + "\",\"idempotencyKey\":\"idem-1\",\"entityType\":\"cliente\","
+            + "\"entityId\":\""
+            + UUID.randomUUID()
+            + "\",\"operationType\":\"upsert\",\"entityVersion\":1,"
+            + "\"payloadVersion\":1,\"payload\":{\"name\":\"Dado sintético\"}}";
+    String validBatch = "{\"contractVersion\":1,\"operations\":[" + validOperation + "]}";
+
+    mockMvc
+        .perform(
+            post("/sync/operations")
+                .header("Authorization", authorization)
+                .header(SyncContract.VERSION_HEADER, "1")
+                .contentType("application/json")
+                .content(validBatch))
+        .andExpect(status().isNotImplemented())
+        .andExpect(jsonPath("$.code").value("NOT_IMPLEMENTED"))
+        .andExpect(jsonPath("$.retryable").value(false));
+
+    mockMvc
+        .perform(
+            post("/sync/operations")
+                .header("Authorization", authorization)
+                .header(SyncContract.VERSION_HEADER, "1")
+                .contentType("application/json")
+                .content(validBatch.replace("\"contractVersion\":1", "\"contractVersion\":2")))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.code").value("CONTRACT_VERSION_UNSUPPORTED"));
+
+    mockMvc
+        .perform(
+            post("/sync/operations")
+                .header("Authorization", authorization)
+                .header(SyncContract.VERSION_HEADER, "1")
+                .contentType("application/json")
+                .content(validBatch.substring(0, validBatch.length() - 1) + ",\"surprise\":true}"))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.code").value("MALFORMED_REQUEST"));
+
+    mockMvc
+        .perform(
+            post("/sync/operations")
+                .header("Authorization", authorization)
+                .header(SyncContract.VERSION_HEADER, "1")
+                .contentType("application/json")
+                .content("{not-json"))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.code").value("MALFORMED_REQUEST"));
+  }
+
+  @Test
+  void contractValidationAndTransportErrorsExposeRetrySemantics() {
+    assertTrue(SyncErrorCode.CONNECTION_UNAVAILABLE.retryable());
+    assertTrue(SyncErrorCode.REQUEST_TIMEOUT.retryable());
+    assertTrue(SyncErrorCode.RETRY_LATER.retryable());
+    assertFalse(SyncErrorCode.AUTHORIZATION_REQUIRED.retryable());
+    assertFalse(SyncErrorCode.CONFLICT.retryable());
+    assertFalse(SyncErrorCode.VALIDATION_FAILED.retryable());
+  }
+
+  @Test
   void revokingTheStationImmediatelyInvalidatesItsAccessToken() throws Exception {
     Pairing pairing = pair(enrollNewEstablishment("Salão de teste").pairingCode(), "Principal");
     AccessToken token = issueAccessToken(pairing);
@@ -141,7 +244,7 @@ class DeviceAuthenticationIntegrationTest {
                     .contentType("application/json")
                     .content("{\"establishmentName\":\"Salão de teste\"}"))
             .andExpect(status().isUnauthorized())
-            .andExpect(jsonPath("$.code").value("SYNC_UNAUTHORIZED"))
+            .andExpect(jsonPath("$.code").value("AUTHORIZATION_REQUIRED"))
             .andReturn();
     assertFalse(invalidProvisioning.getResponse().getContentAsString().contains(ADMIN_SECRET));
 
@@ -157,7 +260,7 @@ class DeviceAuthenticationIntegrationTest {
                         new DeviceAuthenticationController.PairingRequest(
                             secondEnrollment.pairingCode(), "Outra estação"))))
         .andExpect(status().isConflict())
-        .andExpect(jsonPath("$.code").value("ACTIVE_STATION_ALREADY_EXISTS"));
+        .andExpect(jsonPath("$.code").value("CONFLICT"));
   }
 
   private Enrollment enrollNewEstablishment(String name) throws Exception {

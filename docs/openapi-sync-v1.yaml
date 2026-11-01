@@ -1,0 +1,258 @@
+openapi: 3.1.0
+info:
+  title: Espaço Tucumã Sync API
+  version: "1"
+  description: >-
+    Manual synchronization contract. The DTOs contain protocol data only and do not expose
+    SQL tables or persistence entities. Routes marked 501 are defined but implemented by later
+    synchronization queue tasks.
+security:
+  - deviceBearer: []
+paths:
+  /sync/status:
+    get:
+      operationId: getSyncStatus
+      parameters:
+        - $ref: '#/components/parameters/ContractVersion'
+      responses:
+        '200':
+          description: Authenticated installation and confirmed remote checkpoint.
+          headers:
+            X-Tucuma-Contract-Version:
+              schema: { type: string, const: "1" }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SyncStatusResponse' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /sync/operations:
+    post:
+      operationId: submitOperations
+      parameters:
+        - $ref: '#/components/parameters/ContractVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OperationsRequest' }
+      responses:
+        '200':
+          description: Per-operation acceptance, rejection, or conflict result.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OperationsResponse' }
+        '501': { $ref: '#/components/responses/ApiError' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /sync/changes:
+    get:
+      operationId: getSyncChanges
+      parameters:
+        - $ref: '#/components/parameters/ContractVersion'
+        - name: after
+          in: query
+          required: true
+          schema: { type: integer, format: int64, minimum: 0 }
+      responses:
+        '200':
+          description: Incremental changes after the supplied checkpoint.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChangesResponse' }
+        '501': { $ref: '#/components/responses/ApiError' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /sync/backup:
+    post:
+      operationId: createSyncBackup
+      parameters:
+        - $ref: '#/components/parameters/ContractVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BackupRequest' }
+      responses:
+        '200':
+          description: Backup point for a fully confirmed checkpoint.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BackupResponse' }
+        '501': { $ref: '#/components/responses/ApiError' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /sync/backups:
+    get:
+      operationId: listSyncBackups
+      parameters:
+        - $ref: '#/components/parameters/ContractVersion'
+      responses:
+        '200':
+          description: Validated recovery points for the authenticated establishment.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BackupsResponse' }
+        '501': { $ref: '#/components/responses/ApiError' }
+        default: { $ref: '#/components/responses/ApiError' }
+  /sync/restore-request:
+    post:
+      operationId: requestSyncRestore
+      parameters:
+        - $ref: '#/components/parameters/ContractVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RestoreRequest' }
+      responses:
+        '200':
+          description: Temporary authorization for a validated recovery point.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RestoreResponse' }
+        '501': { $ref: '#/components/responses/ApiError' }
+        default: { $ref: '#/components/responses/ApiError' }
+components:
+  securitySchemes:
+    deviceBearer:
+      type: http
+      scheme: bearer
+  parameters:
+    ContractVersion:
+      name: X-Tucuma-Contract-Version
+      in: header
+      required: true
+      schema: { type: string, const: "1" }
+  responses:
+    ApiError:
+      description: Structured error. Retry only when retryable is true.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiErrorResponse' }
+  schemas:
+    ApiErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [contractVersion, code, retryable]
+      properties:
+        contractVersion: { type: integer, const: 1 }
+        code:
+          type: string
+          enum: [CONNECTION_UNAVAILABLE, REQUEST_TIMEOUT, RETRY_LATER, AUTHORIZATION_REQUIRED, VALIDATION_FAILED, MALFORMED_REQUEST, CONTRACT_VERSION_UNSUPPORTED, CONFLICT, PAYLOAD_TOO_LARGE, NOT_IMPLEMENTED, INTERNAL_ERROR]
+        retryable: { type: boolean }
+    SyncStatusResponse:
+      type: object
+      additionalProperties: false
+      required: [contractVersion, establishmentId, deviceId, serviceStatus, checkpoint]
+      properties:
+        contractVersion: { type: integer, const: 1 }
+        establishmentId: { type: string, format: uuid }
+        deviceId: { type: string, format: uuid }
+        serviceStatus: { type: string, enum: [AVAILABLE] }
+        checkpoint: { type: integer, format: int64, minimum: 0 }
+    OperationsRequest:
+      type: object
+      additionalProperties: false
+      required: [contractVersion, operations]
+      properties:
+        contractVersion: { type: integer, const: 1 }
+        operations:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { $ref: '#/components/schemas/OperationSubmission' }
+    OperationSubmission:
+      type: object
+      additionalProperties: false
+      required: [operationId, idempotencyKey, entityType, entityId, operationType, entityVersion, payloadVersion, payload]
+      properties:
+        operationId: { type: string, format: uuid }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 160 }
+        entityType: { type: string, minLength: 1, maxLength: 80 }
+        entityId: { type: string, format: uuid }
+        operationType: { type: string, minLength: 1, maxLength: 80 }
+        entityVersion: { type: integer, format: int64, minimum: 0 }
+        payloadVersion: { type: integer, minimum: 1 }
+        payload: { type: object, additionalProperties: true }
+    OperationsResponse:
+      type: object
+      additionalProperties: false
+      required: [contractVersion, checkpoint, results]
+      properties:
+        contractVersion: { type: integer, const: 1 }
+        checkpoint: { type: integer, format: int64, minimum: 0 }
+        results:
+          type: array
+          items: { $ref: '#/components/schemas/OperationResult' }
+    OperationResult:
+      type: object
+      additionalProperties: false
+      required: [operationId, outcome]
+      properties:
+        operationId: { type: string, format: uuid }
+        outcome: { type: string, enum: [ACCEPTED, REJECTED, CONFLICT] }
+        errorCode: { $ref: '#/components/schemas/ErrorCode' }
+    ChangesResponse:
+      type: object
+      additionalProperties: false
+      required: [contractVersion, checkpoint, changes]
+      properties:
+        contractVersion: { type: integer, const: 1 }
+        checkpoint: { type: integer, format: int64, minimum: 0 }
+        changes:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [operationId, entityType, entityId, operationType, entityVersion, payload]
+            properties:
+              operationId: { type: string, format: uuid }
+              entityType: { type: string }
+              entityId: { type: string, format: uuid }
+              operationType: { type: string }
+              entityVersion: { type: integer, format: int64 }
+              payload: { type: object, additionalProperties: true }
+    BackupRequest:
+      type: object
+      additionalProperties: false
+      required: [contractVersion, checkpoint]
+      properties:
+        contractVersion: { type: integer, const: 1 }
+        checkpoint: { type: integer, format: int64, minimum: 0 }
+    BackupResponse:
+      type: object
+      additionalProperties: false
+      required: [contractVersion, backupId, checkpoint, status, createdAt]
+      properties:
+        contractVersion: { type: integer, const: 1 }
+        backupId: { type: string, format: uuid }
+        checkpoint: { type: integer, format: int64 }
+        status: { type: string, enum: [PENDING, VALIDATED, FAILED] }
+        createdAt: { type: string, format: date-time }
+    BackupsResponse:
+      type: object
+      additionalProperties: false
+      required: [contractVersion, backups]
+      properties:
+        contractVersion: { type: integer, const: 1 }
+        backups:
+          type: array
+          items: { $ref: '#/components/schemas/BackupResponse' }
+    RestoreRequest:
+      type: object
+      additionalProperties: false
+      required: [contractVersion, backupId]
+      properties:
+        contractVersion: { type: integer, const: 1 }
+        backupId: { type: string, format: uuid }
+    RestoreResponse:
+      type: object
+      additionalProperties: false
+      required: [contractVersion, backupId, status, downloadAuthorization, expiresAt]
+      properties:
+        contractVersion: { type: integer, const: 1 }
+        backupId: { type: string, format: uuid }
+        status: { type: string, enum: [AUTHORIZED] }
+        downloadAuthorization:
+          type: string
+          description: Short-lived credential returned only to the authenticated client.
+        expiresAt: { type: string, format: date-time }
+    ErrorCode:
+      type: string
+      enum: [CONNECTION_UNAVAILABLE, REQUEST_TIMEOUT, RETRY_LATER, AUTHORIZATION_REQUIRED, VALIDATION_FAILED, MALFORMED_REQUEST, CONTRACT_VERSION_UNSUPPORTED, CONFLICT, PAYLOAD_TOO_LARGE, NOT_IMPLEMENTED, INTERNAL_ERROR]
