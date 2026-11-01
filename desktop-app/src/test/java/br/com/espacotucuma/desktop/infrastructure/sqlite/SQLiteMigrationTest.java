@@ -1,0 +1,183 @@
+package br.com.espacotucuma.desktop.infrastructure.sqlite;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+class SQLiteMigrationTest {
+
+  private static final String CLIENT_ID = "e427bb6d-8972-4122-9ad0-f055e0f217b8";
+  private static final String USER_ID = "1f63b8f9-dd18-4c7d-bf1c-25fefbd702a3";
+  private static final String NOW = "2026-11-01T12:00:00Z";
+
+  @Test
+  void emptyDatabaseInstallsTheVersionedSchemaAndEnablesForeignKeys(@TempDir Path temp)
+      throws Exception {
+    Path databaseFile = temp.resolve("empty.sqlite");
+    try (Connection ignored = SQLiteSchemaMigrator.dataSource(databaseFile).getConnection()) {
+      assertTrue(java.nio.file.Files.isRegularFile(databaseFile));
+    }
+
+    try (LocalDatabaseSession database = LocalDatabaseSession.open(databaseFile)) {
+      Connection connection = database.connection();
+      assertEquals(1, pragmaInt(connection, "foreign_keys"));
+      assertTrue(tableExists(connection, "cliente"));
+      assertTrue(tableExists(connection, "agendamento"));
+      assertTrue(tableExists(connection, "recebimento"));
+      assertTrue(tableExists(connection, "movimento_estoque"));
+      assertTrue(tableExists(connection, "evento_auditoria"));
+      assertTrue(tableExists(connection, "operacao_pendente"));
+      assertEquals(
+          1, scalarInt(connection, "SELECT count(*) FROM flyway_schema_history WHERE success = 1"));
+    }
+  }
+
+  @Test
+  void repeatingMigrationPreservesRowsAndDoesNotReapplyVersionedScripts(@TempDir Path temp)
+      throws Exception {
+    Path databaseFile = temp.resolve("repeat.sqlite");
+
+    try (LocalDatabaseSession database = LocalDatabaseSession.open(databaseFile)) {
+      insertClient(database.connection(), CLIENT_ID, "Cliente preservada");
+
+      SQLiteSchemaMigrator.migrate(databaseFile);
+
+      assertEquals(
+          1,
+          scalarInt(
+              database.connection(),
+              "SELECT count(*) FROM cliente WHERE id = '" + CLIENT_ID + "'"));
+      assertEquals(
+          1,
+          scalarInt(
+              database.connection(),
+              "SELECT count(*) FROM flyway_schema_history WHERE success = 1"));
+    }
+  }
+
+  @Test
+  void foreignKeysAndCheckConstraintsRejectInvalidRows(@TempDir Path temp) throws Exception {
+    try (LocalDatabaseSession database =
+        LocalDatabaseSession.open(temp.resolve("constraints.sqlite"))) {
+      Connection connection = database.connection();
+      assertThrows(SQLException.class, () -> insertClient(connection, CLIENT_ID, " "));
+      assertThrows(SQLException.class, () -> insertInvalidAppointment(connection));
+      assertEquals(0, scalarInt(connection, "SELECT count(*) FROM cliente"));
+      assertEquals(0, scalarInt(connection, "SELECT count(*) FROM agendamento"));
+    }
+  }
+
+  @Test
+  void schemaAllowsOnlyOneActiveStation(@TempDir Path temp) throws Exception {
+    try (LocalDatabaseSession database =
+        LocalDatabaseSession.open(temp.resolve("one-station.sqlite"))) {
+      Connection connection = database.connection();
+      insertStation(connection, "6f37f434-53ba-4da2-8ef6-2d223b8544c1", "estacao-principal");
+
+      assertThrows(
+          SQLException.class,
+          () ->
+              insertStation(connection, "fbe181ca-e31c-4ce7-9b55-00f703a37f19", "segunda-estacao"));
+      assertEquals(
+          1,
+          scalarInt(connection, "SELECT count(*) FROM estacao_autorizada WHERE estado = 'ATIVA'"));
+    }
+  }
+
+  @Test
+  void invalidForeignKeyRollsBackTheWholeTransaction(@TempDir Path temp) throws Exception {
+    try (LocalDatabaseSession database =
+        LocalDatabaseSession.open(temp.resolve("rollback.sqlite"))) {
+      Connection connection = database.connection();
+      connection.setAutoCommit(false);
+      try {
+        insertClient(connection, CLIENT_ID, "Cliente temporária");
+        assertThrows(SQLException.class, () -> insertInvalidAppointment(connection));
+        connection.rollback();
+      } finally {
+        connection.setAutoCommit(true);
+      }
+
+      assertEquals(0, scalarInt(connection, "SELECT count(*) FROM cliente"));
+      assertEquals(0, scalarInt(connection, "SELECT count(*) FROM agendamento"));
+    }
+  }
+
+  private void insertClient(Connection connection, String id, String name) throws SQLException {
+    try (PreparedStatement statement =
+        connection.prepareStatement(
+            "INSERT INTO cliente (id, nome, criado_em_utc, atualizado_em_utc) VALUES (?, ?, ?, ?)")) {
+      statement.setString(1, id);
+      statement.setString(2, name);
+      statement.setString(3, NOW);
+      statement.setString(4, NOW);
+      statement.executeUpdate();
+    }
+  }
+
+  private void insertInvalidAppointment(Connection connection) throws SQLException {
+    try (PreparedStatement statement =
+        connection.prepareStatement(
+            "INSERT INTO agendamento (id, cliente_id, profissional_id, servico_id, inicio_em_utc, "
+                + "fim_em_utc, estado, criado_em_utc, atualizado_em_utc) "
+                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+      statement.setString(1, "b0ca52a7-8cf3-4563-9daf-b32af6df7a2a");
+      statement.setString(2, CLIENT_ID);
+      statement.setString(3, "da36de0c-3437-4fe0-b39e-72d042288ac1");
+      statement.setString(4, "1f8fef1e-cc79-43da-b042-64753d82cd37");
+      statement.setString(5, NOW);
+      statement.setString(6, "2026-11-01T13:00:00Z");
+      statement.setString(7, "AGENDADO");
+      statement.setString(8, NOW);
+      statement.setString(9, NOW);
+      statement.executeUpdate();
+    }
+  }
+
+  private void insertStation(Connection connection, String id, String identifier)
+      throws SQLException {
+    try (PreparedStatement statement =
+        connection.prepareStatement(
+            "INSERT INTO estacao_autorizada (id, identificador, estado, autorizada_em_utc) "
+                + "VALUES (?, ?, 'ATIVA', ?)")) {
+      statement.setString(1, id);
+      statement.setString(2, identifier);
+      statement.setString(3, NOW);
+      statement.executeUpdate();
+    }
+  }
+
+  private boolean tableExists(Connection connection, String tableName) throws SQLException {
+    try (PreparedStatement statement =
+        connection.prepareStatement(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?"); ) {
+      statement.setString(1, tableName);
+      try (ResultSet result = statement.executeQuery()) {
+        return result.next();
+      }
+    }
+  }
+
+  private int pragmaInt(Connection connection, String pragma) throws SQLException {
+    try (Statement statement = connection.createStatement();
+        ResultSet result = statement.executeQuery("PRAGMA " + pragma)) {
+      return result.next() ? result.getInt(1) : -1;
+    }
+  }
+
+  private int scalarInt(Connection connection, String sql) throws SQLException {
+    try (Statement statement = connection.createStatement();
+        ResultSet result = statement.executeQuery(sql)) {
+      return result.next() ? result.getInt(1) : -1;
+    }
+  }
+}
