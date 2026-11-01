@@ -76,15 +76,38 @@ class TucumaEntryDialogTest {
   void escapeCancelsWithoutReturningFormData(FxRobot robot) throws Exception {
     CompletableFuture<Optional<Map<String, String>>> cancelled = openForm(robot, Map.of());
     robot.interact(() -> robot.lookup("#form-name").queryTextInputControl().setText("Não salvar"));
-    robot.interact(
+    javafx.scene.Node dialogPane = robot.lookup(".dialog-pane").query();
+    Platform.runLater(
         () ->
-            robot
-                .lookup(".dialog-pane")
-                .query()
-                .fireEvent(
-                    new KeyEvent(
-                        KeyEvent.KEY_PRESSED, "", "", KeyCode.ESCAPE, false, false, false, false)));
+            dialogPane.fireEvent(
+                new KeyEvent(
+                    KeyEvent.KEY_PRESSED, "", "", KeyCode.ESCAPE, false, false, false, false)));
+    WaitForAsyncUtils.waitFor(
+        5, TimeUnit.SECONDS, () -> robot.lookup(".alert").tryQuery().isPresent());
+    assertEquals(
+        "Descartar alterações não salvas?",
+        robot.lookup(".alert .header-panel .label").queryLabeled().getText());
+    robot.interact(() -> robot.lookup("Continuar editando").queryButton().fire());
+    assertTrue(robot.lookup("#form-name").tryQuery().isPresent());
+    Platform.runLater(
+        () ->
+            dialogPane.fireEvent(
+                new KeyEvent(
+                    KeyEvent.KEY_PRESSED, "", "", KeyCode.ESCAPE, false, false, false, false)));
+    WaitForAsyncUtils.waitFor(
+        5, TimeUnit.SECONDS, () -> robot.lookup("Descartar").tryQuery().isPresent());
+    robot.interact(() -> robot.lookup("Descartar").queryButton().fire());
     assertTrue(cancelled.get(5, TimeUnit.SECONDS).isEmpty());
+  }
+
+  @Test
+  @Timeout(30)
+  void cancelsUntouchedFormWithoutAnUnnecessaryConfirmation(FxRobot robot) throws Exception {
+    CompletableFuture<Optional<Map<String, String>>> cancelled = openForm(robot, Map.of());
+    javafx.scene.control.Button cancel = robot.lookup("Cancelar").queryButton();
+    Platform.runLater(cancel::fire);
+    assertTrue(cancelled.get(5, TimeUnit.SECONDS).isEmpty());
+    assertTrue(robot.lookup(".alert").tryQuery().isEmpty());
   }
 
   private CompletableFuture<Optional<Map<String, String>>> openForm(

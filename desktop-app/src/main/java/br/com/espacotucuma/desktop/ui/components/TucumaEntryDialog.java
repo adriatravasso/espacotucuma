@@ -8,6 +8,7 @@ import javafx.event.ActionEvent;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
+import javafx.scene.control.Alert;
 import javafx.scene.control.ButtonBar;
 import javafx.scene.control.ButtonType;
 import javafx.scene.control.Dialog;
@@ -23,8 +24,11 @@ public final class TucumaEntryDialog extends Dialog<Map<String, String>> {
 
   private final Map<String, TextField> fields = new LinkedHashMap<>();
   private final Map<String, String> labels = new LinkedHashMap<>();
+  private final Map<String, String> initialValues = new LinkedHashMap<>();
   private final Map<String, Boolean> required = new LinkedHashMap<>();
   private final Label message = new Label();
+  private boolean saving;
+  private boolean discardConfirmed;
 
   public TucumaEntryDialog(
       Window owner,
@@ -33,7 +37,8 @@ public final class TucumaEntryDialog extends Dialog<Map<String, String>> {
       Map<String, String> initialValues) {
     Objects.requireNonNull(fieldDefinitions, "fieldDefinitions");
     Objects.requireNonNull(initialValues, "initialValues");
-    setTitle(title);
+    this.initialValues.putAll(initialValues);
+    setTitle("Tucumã — Gestão — " + title);
     setHeaderText(title);
     if (owner != null) initOwner(owner);
 
@@ -51,6 +56,7 @@ public final class TucumaEntryDialog extends Dialog<Map<String, String>> {
       String labelText = fieldLabel(id);
       TextField field = new TextField();
       field.setId("form-" + id);
+      field.setAccessibleText(labelText + (isRequired ? ", campo obrigatório" : ""));
       if (isRequired) field.setAccessibleHelp("Campo obrigatório.");
       field.setText(initialValues.getOrDefault(id, ""));
       fields.put(id, field);
@@ -60,6 +66,7 @@ public final class TucumaEntryDialog extends Dialog<Map<String, String>> {
     }
     message.setId("formMessage");
     message.setWrapText(true);
+    message.setAccessibleHelp("Mensagens de validação e estado do formulário.");
     form.add(message, 0, row, 2, 1);
     getDialogPane().setContent(form);
     TucumaTheme.apply(getDialogPane());
@@ -70,14 +77,31 @@ public final class TucumaEntryDialog extends Dialog<Map<String, String>> {
         event -> {
           String invalid = firstMissingRequiredField();
           if (invalid != null) {
-            message.setText("Informe o campo obrigatório: " + invalid + ".");
+            setMessage("Informe o campo obrigatório: " + invalid + ".");
             fields.entrySet().stream()
                 .filter(entry -> labels.get(entry.getKey()).equals(invalid))
                 .findFirst()
                 .ifPresent(entry -> entry.getValue().requestFocus());
             event.consume();
           } else {
-            message.setText("");
+            setMessage("");
+            saving = true;
+          }
+        });
+    Node cancelButton = getDialogPane().lookupButton(ButtonType.CANCEL);
+    cancelButton.addEventFilter(
+        ActionEvent.ACTION,
+        event -> {
+          if (!confirmDiscardIfChanged()) event.consume();
+        });
+    setOnCloseRequest(
+        event -> {
+          if (saving) {
+            saving = false;
+          } else if (discardConfirmed) {
+            discardConfirmed = false;
+          } else if (!confirmDiscardIfChanged()) {
+            event.consume();
           }
         });
     getDialogPane()
@@ -91,7 +115,7 @@ public final class TucumaEntryDialog extends Dialog<Map<String, String>> {
                 ((javafx.scene.control.Button) saveButton).fire();
                 event.consume();
               } else if (event.getCode() == KeyCode.ESCAPE) {
-                close();
+                ((javafx.scene.control.Button) cancelButton).fire();
                 event.consume();
               }
             });
@@ -105,6 +129,44 @@ public final class TucumaEntryDialog extends Dialog<Map<String, String>> {
         .map(entry -> labels.get(entry.getKey()))
         .findFirst()
         .orElse(null);
+  }
+
+  private void setMessage(String text) {
+    message.setText(text);
+    message.setAccessibleText(text);
+  }
+
+  private boolean confirmDiscardIfChanged() {
+    boolean changed =
+        fields.entrySet().stream()
+            .anyMatch(
+                entry -> !Objects.equals(entry.getValue().getText(), initialText(entry.getKey())));
+    if (!changed) return true;
+
+    ButtonType discard = new ButtonType("Descartar", ButtonBar.ButtonData.YES);
+    ButtonType keepEditing = new ButtonType("Continuar editando", ButtonBar.ButtonData.NO);
+    Alert confirmation = new Alert(Alert.AlertType.CONFIRMATION);
+    confirmation.setTitle("Tucumã — Gestão");
+    confirmation.setHeaderText("Descartar alterações não salvas?");
+    confirmation.setContentText("O que foi digitado neste formulário será perdido.");
+    confirmation.getButtonTypes().setAll(keepEditing, discard);
+    if (getOwner() != null) confirmation.initOwner(getOwner());
+    TucumaTheme.apply(confirmation.getDialogPane());
+    confirmation
+        .getDialogPane()
+        .lookupButton(keepEditing)
+        .setAccessibleHelp("Fecha este aviso e mantém o formulário aberto.");
+    confirmation
+        .getDialogPane()
+        .lookupButton(discard)
+        .setAccessibleHelp("Fecha o formulário sem salvar.");
+    boolean confirmed = confirmation.showAndWait().filter(discard::equals).isPresent();
+    discardConfirmed = confirmed;
+    return confirmed;
+  }
+
+  private String initialText(String id) {
+    return initialValues.getOrDefault(id, "");
   }
 
   private Map<String, String> values() {
