@@ -18,6 +18,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -37,12 +38,17 @@ class SyncContractController {
       new TypeReference<>() {};
   private final JdbcTemplate jdbc;
   private final SyncOperationReceiver operationReceiver;
+  private final BackupSnapshotService backupSnapshotService;
   private final ObjectMapper objectMapper;
 
   SyncContractController(
-      JdbcTemplate jdbc, SyncOperationReceiver operationReceiver, ObjectMapper objectMapper) {
+      JdbcTemplate jdbc,
+      SyncOperationReceiver operationReceiver,
+      BackupSnapshotService backupSnapshotService,
+      ObjectMapper objectMapper) {
     this.jdbc = jdbc;
     this.operationReceiver = operationReceiver;
+    this.backupSnapshotService = backupSnapshotService;
     this.objectMapper = objectMapper;
   }
 
@@ -175,9 +181,14 @@ class SyncContractController {
   }
 
   @PostMapping("/backup")
-  ResponseEntity<ApiErrorResponse> createBackup(@RequestBody BackupRequest request) {
+  ResponseEntity<?> createBackup(
+      @RequestBody BackupRequest request, HttpServletRequest httpRequest) {
     SyncContractValidator.validate(request);
-    return notImplemented();
+    UUID establishmentId =
+        (UUID) httpRequest.getAttribute(SyncAuthenticationFilter.ESTABLISHMENT_ID);
+    return ResponseEntity.ok()
+        .cacheControl(CacheControl.noStore())
+        .body(backupSnapshotService.create(establishmentId, request));
   }
 
   @GetMapping("/backups")
