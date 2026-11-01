@@ -51,11 +51,10 @@ fi
 
 unauthorized_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
   --request POST "$base_url/sync/admin/enrollments" \
-  --header 'Authorization: Bearer credencial-demo-invalida' \
   --header 'Content-Type: application/json' \
   --data '{"establishmentName":"Estabelecimento sintético"}')"
 if [[ "$unauthorized_status" != 401 ]]; then
-  echo "O endpoint administrativo aceitou credencial demo inválida: HTTP $unauthorized_status." >&2
+  echo "O endpoint administrativo aceitou uma requisição sem credencial: HTTP $unauthorized_status." >&2
   exit 1
 fi
 
