@@ -1,1 +1,5 @@
-.prompts
+.prompts/
+**/target/
+.idea/
+*.iml
+.env
