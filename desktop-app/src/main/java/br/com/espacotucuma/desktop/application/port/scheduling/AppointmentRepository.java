@@ -22,4 +22,6 @@ public interface AppointmentRepository {
   void updateTime(Appointment appointment);
 
   void cancel(UUID id, java.time.LocalDateTime updatedAt);
+
+  void confirm(UUID id, java.time.LocalDateTime updatedAt);
 }

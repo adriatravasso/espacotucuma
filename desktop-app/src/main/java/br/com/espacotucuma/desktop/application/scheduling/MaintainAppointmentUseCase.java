@@ -261,6 +261,47 @@ public final class MaintainAppointmentUseCase {
         });
   }
 
+  public Appointment confirm(UUID id) {
+    var actor = authorization.requireUser(Permission.SCHEDULE_MANAGE);
+    LocalDateTime now = localNow();
+    Instant eventAt = instantNow();
+    UUID operationId = UUID.randomUUID();
+    return unitOfWork.execute(
+        () -> {
+          Appointment appointment = appointments.findById(id).orElseThrow(() -> missing(id));
+          if (appointment.status() != AppointmentStatus.AGENDADO) {
+            throw new IllegalStateException(
+                "Somente agendamentos pendentes podem ser confirmados.");
+          }
+          LocalDateTime updatedAt =
+              now.isBefore(appointment.updatedAt()) ? appointment.updatedAt() : now;
+          appointments.confirm(id, updatedAt);
+          Appointment confirmed =
+              new Appointment(
+                  appointment.id(),
+                  appointment.clientId(),
+                  appointment.professionalId(),
+                  appointment.serviceId(),
+                  appointment.startsAt(),
+                  appointment.endsAt(),
+                  AppointmentStatus.CONFIRMADO,
+                  appointment.notes(),
+                  appointment.createdBy(),
+                  appointment.createdAt(),
+                  updatedAt);
+          record(
+              id,
+              operationId,
+              actor.id(),
+              "AGENDAMENTO_CONFIRMADO",
+              payload(confirmed, false),
+              "{\"estadoAnterior\":\"AGENDADO\",\"estadoNovo\":\"CONFIRMADO\"}",
+              null,
+              eventAt);
+          return confirmed;
+        });
+  }
+
   public List<Appointment> findForDay(LocalDate day, UUID professionalId) {
     authorization.require(Permission.SCHEDULE_READ);
     return appointments.findForDay(Objects.requireNonNull(day, "day"), professionalId);
