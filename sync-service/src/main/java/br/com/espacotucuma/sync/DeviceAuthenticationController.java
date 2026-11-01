@@ -85,6 +85,44 @@ class DeviceAuthenticationController {
     return noStore(new EnrollmentResponse(establishmentId, pairingCode, expiresAt));
   }
 
+  @PostMapping("/admin/station-replacements")
+  @Transactional
+  ResponseEntity<?> replaceStation(
+      @RequestHeader(name = HttpHeaders.AUTHORIZATION, required = false) String authorization,
+      @RequestBody StationReplacementRequest request) {
+    if (!isProvisioningAdmin(authorization)) return unauthorized();
+    if (request == null
+        || request.establishmentId() == null
+        || request.deviceName() == null
+        || request.deviceName().trim().length() < 2
+        || request.deviceName().trim().length() > 120) {
+      return ResponseEntity.badRequest()
+          .body(new ApiErrorResponse(SyncErrorCode.VALIDATION_FAILED));
+    }
+
+    var establishments =
+        jdbc.query(
+            "SELECT id FROM estabelecimento_remoto WHERE id = ? FOR UPDATE",
+            (rs, row) -> rs.getObject(1, UUID.class),
+            request.establishmentId());
+    if (establishments.isEmpty()) return ResponseEntity.notFound().build();
+
+    jdbc.update(
+        "UPDATE dispositivo_autorizado SET estado = 'REVOGADO', revogado_em = now(), "
+            + "credencial_hash = NULL WHERE estabelecimento_id = ? AND estado = 'ATIVO'",
+        request.establishmentId());
+    jdbc.update(
+        "DELETE FROM codigo_pareamento WHERE consumido_em IS NOT NULL OR expira_em <= now()");
+    String pairingCode = newSecret();
+    Instant expiresAt = Instant.now().plus(PAIRING_LIFETIME);
+    jdbc.update(
+        "INSERT INTO codigo_pareamento (token_hash, estabelecimento_id, expira_em) VALUES (?, ?, ?)",
+        hash(pairingCode),
+        request.establishmentId(),
+        Timestamp.from(expiresAt));
+    return noStore(new EnrollmentResponse(request.establishmentId(), pairingCode, expiresAt));
+  }
+
   @PostMapping("/devices/pair")
   @Transactional
   ResponseEntity<?> pairDevice(@RequestBody PairingRequest request) {
@@ -235,6 +273,8 @@ class DeviceAuthenticationController {
   record EnrollmentResponse(UUID establishmentId, String pairingCode, Instant expiresAt) {}
 
   record PairingRequest(String pairingCode, String deviceName) {}
+
+  record StationReplacementRequest(UUID establishmentId, String deviceName) {}
 
   record PairingResponse(UUID establishmentId, UUID deviceId, String deviceCredential) {}
 

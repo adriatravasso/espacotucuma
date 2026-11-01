@@ -61,16 +61,32 @@ public final class SqliteOutboxRepository implements OutboxRepository {
           try (PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.setString(1, entity);
             statement.setString(2, entityId.toString());
+            long restoredVersion = restoredVersion(entity, entityId);
             try (ResultSet result = statement.executeQuery()) {
-              if (!result.next()) return 0L;
+              if (!result.next()) return restoredVersion;
               long confirmedVersion = result.getLong("versao_remota_confirmada");
-              return result.wasNull() ? result.getLong("versao_esperada") + 1 : confirmedVersion;
+              long nextVersion =
+                  result.wasNull() ? result.getLong("versao_esperada") + 1 : confirmedVersion;
+              return Math.max(restoredVersion, nextVersion);
             }
           } catch (SQLException failure) {
             throw new IllegalStateException(
                 "Não foi possível determinar a versão remota esperada.", failure);
           }
         });
+  }
+
+  private long restoredVersion(String entity, UUID entityId) throws SQLException {
+    try (PreparedStatement statement =
+        connection.prepareStatement(
+            "SELECT versao_remota FROM estado_entidade_restaurada "
+                + "WHERE entidade = ? AND entidade_id = ?")) {
+      statement.setString(1, entity);
+      statement.setString(2, entityId.toString());
+      try (ResultSet result = statement.executeQuery()) {
+        return result.next() ? result.getLong(1) : 0L;
+      }
+    }
   }
 
   @Override

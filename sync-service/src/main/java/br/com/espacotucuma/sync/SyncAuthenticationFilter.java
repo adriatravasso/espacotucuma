@@ -36,6 +36,7 @@ final class SyncAuthenticationFilter extends OncePerRequestFilter {
         || path.equals("/sync/devices/pair")
         || path.equals("/sync/devices/token")
         || path.equals("/sync/admin/enrollments")
+        || path.equals("/sync/admin/station-replacements")
         || (path.startsWith("/sync/admin/devices/") && path.endsWith("/revoke"));
   }
 

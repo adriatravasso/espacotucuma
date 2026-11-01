@@ -8,4 +8,6 @@ public record RestoreResponse(
     UUID backupId,
     String status,
     String downloadAuthorization,
-    Instant expiresAt) {}
+    Instant expiresAt,
+    String checksumSha256,
+    int schemaVersion) {}
