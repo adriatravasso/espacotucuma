@@ -2,6 +2,8 @@ package br.com.espacotucuma.desktop;
 
 import br.com.espacotucuma.desktop.application.client.MaintainClientUseCase;
 import br.com.espacotucuma.desktop.application.client.RegisterClientUseCase;
+import br.com.espacotucuma.desktop.application.commission.CommissionService;
+import br.com.espacotucuma.desktop.application.commission.MaintainCommissionRuleUseCase;
 import br.com.espacotucuma.desktop.application.config.DesktopEnvironment;
 import br.com.espacotucuma.desktop.application.config.DesktopPreferences;
 import br.com.espacotucuma.desktop.application.identity.AuthorizationService;
@@ -13,6 +15,7 @@ import br.com.espacotucuma.desktop.application.identity.LoginUseCase;
 import br.com.espacotucuma.desktop.application.identity.LogoutUseCase;
 import br.com.espacotucuma.desktop.application.identity.SessionContext;
 import br.com.espacotucuma.desktop.application.port.client.ClientRepository;
+import br.com.espacotucuma.desktop.application.port.commission.CommissionRuleRepository;
 import br.com.espacotucuma.desktop.application.port.professional.ProfessionalRepository;
 import br.com.espacotucuma.desktop.application.port.service.ServiceRepository;
 import br.com.espacotucuma.desktop.application.professional.MaintainProfessionalUseCase;
@@ -21,6 +24,7 @@ import br.com.espacotucuma.desktop.infrastructure.security.Pbkdf2PasswordHasher;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.LocalDatabaseSession;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteAuditRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteClientRepository;
+import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteCommissionRuleRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteInitialSetupRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteLocalCredentialRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteOutboxRepository;
@@ -49,6 +53,9 @@ public final class DesktopRuntime implements AutoCloseable {
   private final MaintainProfessionalUseCase maintainProfessional;
   private final ServiceRepository services;
   private final MaintainServiceUseCase maintainService;
+  private final CommissionRuleRepository commissionRules;
+  private final MaintainCommissionRuleUseCase maintainCommissionRule;
+  private final CommissionService commissions;
   private final AuthorizationService authorization;
   private final CreateFirstAdministratorUseCase createFirstAdministrator;
   private final ChangeLocalPasswordUseCase changeLocalPassword;
@@ -70,6 +77,9 @@ public final class DesktopRuntime implements AutoCloseable {
       MaintainProfessionalUseCase maintainProfessional,
       ServiceRepository services,
       MaintainServiceUseCase maintainService,
+      CommissionRuleRepository commissionRules,
+      MaintainCommissionRuleUseCase maintainCommissionRule,
+      CommissionService commissions,
       AuthorizationService authorization,
       CreateFirstAdministratorUseCase createFirstAdministrator,
       ChangeLocalPasswordUseCase changeLocalPassword,
@@ -89,6 +99,9 @@ public final class DesktopRuntime implements AutoCloseable {
     this.maintainProfessional = maintainProfessional;
     this.services = services;
     this.maintainService = maintainService;
+    this.commissionRules = commissionRules;
+    this.maintainCommissionRule = maintainCommissionRule;
+    this.commissions = commissions;
     this.authorization = authorization;
     this.createFirstAdministrator = createFirstAdministrator;
     this.changeLocalPassword = changeLocalPassword;
@@ -164,6 +177,18 @@ public final class DesktopRuntime implements AutoCloseable {
               authorization,
               audit,
               stationId);
+      CommissionRuleRepository commissionRules =
+          new SqliteCommissionRuleRepository(database.connection(), unitOfWork);
+      MaintainCommissionRuleUseCase maintainCommissionRule =
+          new MaintainCommissionRuleUseCase(
+              unitOfWork,
+              commissionRules,
+              new SqliteOutboxRepository(database.connection(), unitOfWork),
+              authorization,
+              audit,
+              stationId);
+      CommissionService commissions =
+          new CommissionService(commissionRules, unitOfWork, authorization);
       CreateFirstAdministratorUseCase createFirstAdministrator =
           new CreateFirstAdministratorUseCase(
               unitOfWork,
@@ -200,6 +225,9 @@ public final class DesktopRuntime implements AutoCloseable {
           maintainProfessional,
           services,
           maintainService,
+          commissionRules,
+          maintainCommissionRule,
+          commissions,
           authorization,
           createFirstAdministrator,
           changeLocalPassword,
@@ -249,6 +277,18 @@ public final class DesktopRuntime implements AutoCloseable {
 
   public MaintainServiceUseCase maintainService() {
     return maintainService;
+  }
+
+  public CommissionRuleRepository commissionRules() {
+    return commissionRules;
+  }
+
+  public MaintainCommissionRuleUseCase maintainCommissionRule() {
+    return maintainCommissionRule;
+  }
+
+  public CommissionService commissions() {
+    return commissions;
   }
 
   public AuthorizationService authorization() {

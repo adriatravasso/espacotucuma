@@ -46,11 +46,16 @@ class SQLiteMigrationTest {
       assertTrue(tableExists(connection, "operacao_pendente"));
       assertTrue(tableExists(connection, "status_protecao"));
       assertTrue(tableExists(connection, "indisponibilidade_profissional"));
+      assertTrue(tableExists(connection, "regra_comissao_profissional_servico"));
+      assertTrue(columnExists(connection, "atendimento_servico", "comissao_regra_id"));
+      assertTrue(columnExists(connection, "atendimento_servico", "comissao_origem"));
       assertTrue(indexExists(connection, "idx_servico_categoria_ativo_nome"));
+      assertTrue(indexExists(connection, "idx_regra_comissao_profissional_ativo"));
       assertTrue(triggerExists(connection, "trg_agendamento_profissional_ativo_insert"));
       assertTrue(triggerExists(connection, "trg_agendamento_profissional_ativo_update"));
       assertEquals(
-          9, scalarInt(connection, "SELECT count(*) FROM flyway_schema_history WHERE success = 1"));
+          10,
+          scalarInt(connection, "SELECT count(*) FROM flyway_schema_history WHERE success = 1"));
     }
   }
 
@@ -70,7 +75,7 @@ class SQLiteMigrationTest {
               database.connection(),
               "SELECT count(*) FROM cliente WHERE id = '" + CLIENT_ID + "'"));
       assertEquals(
-          9,
+          10,
           scalarInt(
               database.connection(),
               "SELECT count(*) FROM flyway_schema_history WHERE success = 1"));
@@ -214,6 +219,17 @@ class SQLiteMigrationTest {
       try (ResultSet result = statement.executeQuery()) {
         return result.next();
       }
+    }
+  }
+
+  private boolean columnExists(Connection connection, String table, String column)
+      throws SQLException {
+    try (Statement statement = connection.createStatement();
+        ResultSet result = statement.executeQuery("PRAGMA table_info(" + table + ")")) {
+      while (result.next()) {
+        if (column.equals(result.getString("name"))) return true;
+      }
+      return false;
     }
   }
 
