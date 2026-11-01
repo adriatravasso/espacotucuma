@@ -58,7 +58,7 @@ class HealthEndpointSmokeTest {
                 + "'entidade_remota_sincronizada')",
             Integer.class));
     assertEquals(
-        4,
+        5,
         jdbc.queryForObject(
             "SELECT COUNT(*) FROM flyway_schema_history WHERE success = true", Integer.class));
     assertTrue(POSTGRES.isRunning());
