@@ -4,6 +4,7 @@ import br.com.espacotucuma.desktop.application.audit.AuditEvent;
 import br.com.espacotucuma.desktop.application.commission.CommissionCalculator;
 import br.com.espacotucuma.desktop.application.identity.AuthorizationService;
 import br.com.espacotucuma.desktop.application.identity.Permission;
+import br.com.espacotucuma.desktop.application.inventory.MaintainInventoryUseCase;
 import br.com.espacotucuma.desktop.application.outbox.PendingOperation;
 import br.com.espacotucuma.desktop.application.port.attendance.AttendanceRepository;
 import br.com.espacotucuma.desktop.application.port.audit.AuditRepository;
@@ -36,6 +37,7 @@ public final class MaintainAttendanceUseCase {
   private final AuthorizationService authorization;
   private final AuditRepository audit;
   private final UUID stationId;
+  private final MaintainInventoryUseCase inventory;
   private final Clock clock;
 
   public MaintainAttendanceUseCase(
@@ -58,6 +60,32 @@ public final class MaintainAttendanceUseCase {
         authorization,
         audit,
         stationId,
+        null,
+        Clock.system(BUSINESS_ZONE));
+  }
+
+  public MaintainAttendanceUseCase(
+      UnitOfWork unitOfWork,
+      AttendanceRepository attendances,
+      AppointmentRepository appointments,
+      ServiceRepository services,
+      CommissionRuleRepository commissionRules,
+      OutboxRepository outbox,
+      AuthorizationService authorization,
+      AuditRepository audit,
+      UUID stationId,
+      MaintainInventoryUseCase inventory) {
+    this(
+        unitOfWork,
+        attendances,
+        appointments,
+        services,
+        commissionRules,
+        outbox,
+        authorization,
+        audit,
+        stationId,
+        inventory,
         Clock.system(BUSINESS_ZONE));
   }
 
@@ -72,6 +100,32 @@ public final class MaintainAttendanceUseCase {
       AuditRepository audit,
       UUID stationId,
       Clock clock) {
+    this(
+        unitOfWork,
+        attendances,
+        appointments,
+        services,
+        commissionRules,
+        outbox,
+        authorization,
+        audit,
+        stationId,
+        null,
+        clock);
+  }
+
+  public MaintainAttendanceUseCase(
+      UnitOfWork unitOfWork,
+      AttendanceRepository attendances,
+      AppointmentRepository appointments,
+      ServiceRepository services,
+      CommissionRuleRepository commissionRules,
+      OutboxRepository outbox,
+      AuthorizationService authorization,
+      AuditRepository audit,
+      UUID stationId,
+      MaintainInventoryUseCase inventory,
+      Clock clock) {
     this.unitOfWork = Objects.requireNonNull(unitOfWork, "unitOfWork");
     this.attendances = Objects.requireNonNull(attendances, "attendances");
     this.appointments = Objects.requireNonNull(appointments, "appointments");
@@ -81,6 +135,7 @@ public final class MaintainAttendanceUseCase {
     this.authorization = Objects.requireNonNull(authorization, "authorization");
     this.audit = Objects.requireNonNull(audit, "audit");
     this.stationId = Objects.requireNonNull(stationId, "stationId");
+    this.inventory = inventory;
     this.clock = Objects.requireNonNull(clock, "clock");
   }
 
@@ -278,6 +333,10 @@ public final class MaintainAttendanceUseCase {
           List<AttendanceServiceLine> lines = attendances.findServices(attendanceId);
           if (lines.isEmpty()) {
             throw new IllegalStateException("Adicione ao menos um serviço antes de concluir.");
+          }
+          if (inventory != null) {
+            for (AttendanceServiceLine line : lines)
+              inventory.consumeForAttendanceLine(attendance.id(), line, actor.id(), now);
           }
           Appointment appointment =
               appointments

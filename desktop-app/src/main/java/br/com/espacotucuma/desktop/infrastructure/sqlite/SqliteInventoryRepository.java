@@ -35,7 +35,7 @@ public final class SqliteInventoryRepository implements InventoryRepository {
         };
     if (!query.ascending()) order += " DESC";
     String base =
-        " FROM produto p LEFT JOIN fornecedor f ON f.id=p.fornecedor_id LEFT JOIN (SELECT produto_id,SUM(CASE WHEN tipo='ENTRADA' THEN quantidade_milesimos WHEN tipo IN ('SAIDA','CONSUMO_SERVICO') THEN -quantidade_milesimos ELSE 0 END) saldo FROM movimento_estoque GROUP BY produto_id) m ON m.produto_id=p.id WHERE "
+        " FROM produto p LEFT JOIN fornecedor f ON f.id=p.fornecedor_id LEFT JOIN (SELECT produto_id,SUM(CASE WHEN tipo='ENTRADA' OR (tipo='AJUSTE' AND direcao_ajuste='ENTRADA') THEN quantidade_milesimos WHEN tipo IN ('SAIDA','CONSUMO_SERVICO') OR (tipo='AJUSTE' AND direcao_ajuste='SAIDA') THEN -quantidade_milesimos ELSE 0 END) saldo FROM movimento_estoque GROUP BY produto_id) m ON m.produto_id=p.id WHERE "
             + condition
             + " AND (?=0 OR COALESCE(m.saldo,0)<=p.estoque_minimo_milesimos)";
     try {
@@ -171,6 +171,150 @@ public final class SqliteInventoryRepository implements InventoryRepository {
   }
 
   @Override
+  public long stockOnHand(UUID productId) {
+    try (PreparedStatement s =
+        connection.prepareStatement(
+            "SELECT COALESCE(SUM(CASE WHEN tipo='ENTRADA' OR (tipo='AJUSTE' AND direcao_ajuste='ENTRADA') THEN quantidade_milesimos WHEN tipo IN ('SAIDA','CONSUMO_SERVICO') OR (tipo='AJUSTE' AND direcao_ajuste='SAIDA') THEN -quantidade_milesimos ELSE 0 END),0) FROM movimento_estoque WHERE produto_id=?")) {
+      s.setString(1, productId.toString());
+      try (ResultSet r = s.executeQuery()) {
+        r.next();
+        long balance = r.getLong(1);
+        if (balance < 0)
+          throw new IllegalStateException("O histórico de estoque contém um saldo negativo.");
+        return balance;
+      }
+    } catch (SQLException e) {
+      throw failure("calcular saldo de estoque", e);
+    }
+  }
+
+  @Override
+  public List<StockMovement> movementHistory(UUID productId) {
+    try (PreparedStatement s =
+        connection.prepareStatement(
+            "SELECT * FROM movimento_estoque WHERE produto_id=? ORDER BY criado_em_utc DESC,id")) {
+      s.setString(1, productId.toString());
+      try (ResultSet r = s.executeQuery()) {
+        List<StockMovement> movements = new ArrayList<>();
+        while (r.next()) movements.add(readMovement(r));
+        return List.copyOf(movements);
+      }
+    } catch (SQLException e) {
+      throw failure("consultar histórico de estoque", e);
+    }
+  }
+
+  @Override
+  public Optional<StockMovement> findMovementByKey(String key) {
+    return findMovement("chave_idempotencia", key);
+  }
+
+  @Override
+  public Optional<StockMovement> findMovementById(UUID id) {
+    return findMovement("id", id.toString());
+  }
+
+  @Override
+  public Optional<StockMovement> findReversal(UUID originalMovementId) {
+    return findMovement("movimento_origem_id", originalMovementId.toString());
+  }
+
+  private Optional<StockMovement> findMovement(String field, String value) {
+    try (PreparedStatement s =
+        connection.prepareStatement("SELECT * FROM movimento_estoque WHERE " + field + "=?")) {
+      s.setString(1, value);
+      try (ResultSet r = s.executeQuery()) {
+        return r.next() ? Optional.of(readMovement(r)) : Optional.empty();
+      }
+    } catch (SQLException e) {
+      throw failure("consultar movimento de estoque", e);
+    }
+  }
+
+  @Override
+  public List<ServiceMaterial> serviceMaterials(UUID serviceId) {
+    try (PreparedStatement s =
+        connection.prepareStatement(
+            "SELECT m.servico_id,m.produto_id,s.nome servico,p.nome produto,m.quantidade_milesimos FROM material_servico m JOIN servico s ON s.id=m.servico_id JOIN produto p ON p.id=m.produto_id WHERE m.servico_id=? AND m.ativo=1 ORDER BY p.nome COLLATE NOCASE")) {
+      s.setString(1, serviceId.toString());
+      try (ResultSet r = s.executeQuery()) {
+        List<ServiceMaterial> materials = new ArrayList<>();
+        while (r.next()) materials.add(readMaterial(r));
+        return List.copyOf(materials);
+      }
+    } catch (SQLException e) {
+      throw failure("consultar materiais do serviço", e);
+    }
+  }
+
+  @Override
+  public List<ServiceMaterial> serviceMaterialsForActiveServices(List<UUID> serviceIds) {
+    if (serviceIds.isEmpty()) return List.of();
+    String placeholders = String.join(",", Collections.nCopies(serviceIds.size(), "?"));
+    try (PreparedStatement s =
+        connection.prepareStatement(
+            "SELECT m.servico_id,m.produto_id,s.nome servico,p.nome produto,m.quantidade_milesimos FROM material_servico m JOIN servico s ON s.id=m.servico_id JOIN produto p ON p.id=m.produto_id WHERE m.ativo=1 AND m.servico_id IN ("
+                + placeholders
+                + ") ORDER BY m.servico_id,p.nome COLLATE NOCASE")) {
+      for (int i = 0; i < serviceIds.size(); i++) s.setString(i + 1, serviceIds.get(i).toString());
+      try (ResultSet r = s.executeQuery()) {
+        List<ServiceMaterial> materials = new ArrayList<>();
+        while (r.next()) materials.add(readMaterial(r));
+        return List.copyOf(materials);
+      }
+    } catch (SQLException e) {
+      throw failure("consultar materiais de atendimento", e);
+    }
+  }
+
+  @Override
+  public boolean serviceIsActive(UUID serviceId) {
+    try (PreparedStatement s =
+        connection.prepareStatement("SELECT 1 FROM servico WHERE id=? AND ativo=1")) {
+      s.setString(1, serviceId.toString());
+      try (ResultSet r = s.executeQuery()) {
+        return r.next();
+      }
+    } catch (SQLException e) {
+      throw failure("validar serviço", e);
+    }
+  }
+
+  @Override
+  public void saveServiceMaterial(
+      UUID serviceId, UUID productId, long quantityMilliUnits, Instant at) {
+    requireTx();
+    try (PreparedStatement s =
+        connection.prepareStatement(
+            "INSERT INTO material_servico(id,servico_id,produto_id,quantidade_milesimos,ativo,criado_em_utc,atualizado_em_utc) VALUES(?,?,?,?,1,?,?) ON CONFLICT(servico_id,produto_id) DO UPDATE SET quantidade_milesimos=excluded.quantidade_milesimos,ativo=1,atualizado_em_utc=excluded.atualizado_em_utc")) {
+      s.setString(1, UUID.randomUUID().toString());
+      s.setString(2, serviceId.toString());
+      s.setString(3, productId.toString());
+      s.setLong(4, quantityMilliUnits);
+      s.setString(5, at.toString());
+      s.setString(6, at.toString());
+      s.executeUpdate();
+    } catch (SQLException e) {
+      throw failure("configurar material do serviço", e);
+    }
+  }
+
+  @Override
+  public void deactivateServiceMaterial(UUID serviceId, UUID productId, Instant at) {
+    requireTx();
+    try (PreparedStatement s =
+        connection.prepareStatement(
+            "UPDATE material_servico SET ativo=0,atualizado_em_utc=? WHERE servico_id=? AND produto_id=? AND ativo=1")) {
+      s.setString(1, at.toString());
+      s.setString(2, serviceId.toString());
+      s.setString(3, productId.toString());
+      s.executeUpdate();
+    } catch (SQLException e) {
+      throw failure("remover material do serviço", e);
+    }
+  }
+
+  @Override
   public void insertSupplier(Supplier x) {
     requireTx();
     try (PreparedStatement s =
@@ -284,6 +428,39 @@ public final class SqliteInventoryRepository implements InventoryRepository {
     }
   }
 
+  @Override
+  public void insertMovement(StockMovement movement) {
+    requireTx();
+    String sql =
+        "INSERT INTO movimento_estoque(id,produto_id,atendimento_id,tipo,quantidade_milesimos,custo_unitario_centavos,motivo,criado_por_usuario_id,criado_em_utc,chave_idempotencia,direcao_ajuste,atendimento_servico_id,movimento_origem_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)";
+    try (PreparedStatement s = connection.prepareStatement(sql)) {
+      s.setString(1, movement.id().toString());
+      s.setString(2, movement.productId().toString());
+      s.setString(3, movement.attendanceId() == null ? null : movement.attendanceId().toString());
+      s.setString(4, movement.type().name());
+      s.setLong(5, movement.quantityMilliUnits());
+      s.setLong(6, movement.unitCostCents());
+      s.setString(7, movement.reason());
+      s.setString(8, movement.createdBy().toString());
+      s.setString(9, movement.createdAt().toString());
+      s.setString(10, movement.idempotencyKey());
+      s.setString(
+          11,
+          movement.adjustmentDirection() == null ? null : movement.adjustmentDirection().name());
+      s.setString(
+          12,
+          movement.attendanceServiceLineId() == null
+              ? null
+              : movement.attendanceServiceLineId().toString());
+      s.setString(
+          13,
+          movement.reversesMovementId() == null ? null : movement.reversesMovementId().toString());
+      s.executeUpdate();
+    } catch (SQLException e) {
+      throw failure("registrar movimento de estoque", e);
+    }
+  }
+
   private void bindSupplier(PreparedStatement s, Supplier x) throws SQLException {
     s.setString(1, x.id().toString());
     s.setString(2, x.name());
@@ -322,6 +499,33 @@ public final class SqliteInventoryRepository implements InventoryRepository {
         r.getInt("ativo") == 1,
         Instant.parse(r.getString("criado_em_utc")),
         Instant.parse(r.getString("atualizado_em_utc")));
+  }
+
+  private StockMovement readMovement(ResultSet r) throws SQLException {
+    String direction = r.getString("direcao_ajuste");
+    return new StockMovement(
+        UUID.fromString(r.getString("id")),
+        UUID.fromString(r.getString("produto_id")),
+        uuid(r.getString("atendimento_id")),
+        uuid(r.getString("atendimento_servico_id")),
+        StockMovementType.valueOf(r.getString("tipo")),
+        direction == null ? null : AdjustmentDirection.valueOf(direction),
+        r.getLong("quantidade_milesimos"),
+        r.getLong("custo_unitario_centavos"),
+        r.getString("motivo"),
+        r.getString("chave_idempotencia"),
+        uuid(r.getString("movimento_origem_id")),
+        UUID.fromString(r.getString("criado_por_usuario_id")),
+        Instant.parse(r.getString("criado_em_utc")));
+  }
+
+  private ServiceMaterial readMaterial(ResultSet r) throws SQLException {
+    return new ServiceMaterial(
+        UUID.fromString(r.getString("servico_id")),
+        UUID.fromString(r.getString("produto_id")),
+        r.getString("servico"),
+        r.getString("produto"),
+        r.getLong("quantidade_milesimos"));
   }
 
   private Supplier readSupplier(ResultSet r) throws SQLException {

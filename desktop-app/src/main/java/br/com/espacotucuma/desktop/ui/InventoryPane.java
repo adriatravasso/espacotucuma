@@ -3,6 +3,10 @@ package br.com.espacotucuma.desktop.ui;
 import br.com.espacotucuma.desktop.application.identity.AuthorizationService;
 import br.com.espacotucuma.desktop.application.inventory.*;
 import br.com.espacotucuma.desktop.application.port.inventory.InventoryRepository;
+import br.com.espacotucuma.desktop.application.port.service.ServiceRepository;
+import br.com.espacotucuma.desktop.application.service.BeautyService;
+import br.com.espacotucuma.desktop.application.service.ServicePageQuery;
+import br.com.espacotucuma.desktop.application.service.ServiceSortField;
 import br.com.espacotucuma.desktop.domain.money.Money;
 import java.math.BigDecimal;
 import java.util.UUID;
@@ -16,6 +20,7 @@ public final class InventoryPane extends BorderPane {
   private final InventoryRepository repository;
   private final MaintainInventoryUseCase useCase;
   private final AuthorizationService authorization;
+  private final ServiceRepository services;
   private final TableView<StockProduct> table = new TableView<>();
   private final TextField search = new TextField();
   private final ComboBox<String> category = new ComboBox<>();
@@ -27,9 +32,18 @@ public final class InventoryPane extends BorderPane {
       InventoryRepository repository,
       MaintainInventoryUseCase useCase,
       AuthorizationService authorization) {
+    this(repository, useCase, authorization, null);
+  }
+
+  public InventoryPane(
+      InventoryRepository repository,
+      MaintainInventoryUseCase useCase,
+      AuthorizationService authorization,
+      ServiceRepository services) {
     this.repository = repository;
     this.useCase = useCase;
     this.authorization = authorization;
+    this.services = services;
     setPadding(new Insets(10));
     buildTable();
     search.setPromptText("Nome, SKU ou fornecedor");
@@ -54,14 +68,32 @@ public final class InventoryPane extends BorderPane {
     Button entry = new Button("Registrar entrada");
     entry.setId("inventory-entry");
     entry.setOnAction(e -> entryDialog());
+    Button exit = new Button("Saída/ajuste");
+    exit.setId("inventory-exit-adjust");
+    exit.setOnAction(e -> movementDialog());
     Button deactivate = new Button("Inativar");
     deactivate.setOnAction(e -> deactivate());
     Button supplier = new Button("Novo fornecedor");
     supplier.setId("inventory-new-supplier");
     supplier.setOnAction(e -> supplierDialog());
+    Button recipe = new Button("Materiais por serviço");
+    recipe.setId("inventory-service-materials");
+    recipe.setOnAction(e -> serviceMaterialDialog());
     HBox controls =
         new HBox(
-            7, search, category, inactive, low, filter, add, edit, entry, deactivate, supplier);
+            7,
+            search,
+            category,
+            inactive,
+            low,
+            filter,
+            add,
+            edit,
+            entry,
+            exit,
+            deactivate,
+            supplier,
+            recipe);
     HBox.setHgrow(search, Priority.ALWAYS);
     setTop(controls);
     setCenter(table);
@@ -101,7 +133,13 @@ public final class InventoryPane extends BorderPane {
         authorization.isAllowed(
             br.com.espacotucuma.desktop.application.identity.Permission.INVENTORY_MANAGE);
     for (String id :
-        new String[] {"inventory-new-product", "inventory-entry", "inventory-new-supplier"}) {
+        new String[] {
+          "inventory-new-product",
+          "inventory-entry",
+          "inventory-new-supplier",
+          "inventory-exit-adjust",
+          "inventory-service-materials"
+        }) {
       javafx.scene.Node n = lookup("#" + id);
       if (n != null) n.setDisable(!can);
     }
@@ -274,6 +312,137 @@ public final class InventoryPane extends BorderPane {
                 refresh();
               } catch (RuntimeException e) {
                 error(e);
+              }
+            });
+  }
+
+  private void movementDialog() {
+    StockProduct selected = table.getSelectionModel().getSelectedItem();
+    if (selected == null) {
+      error(new IllegalArgumentException("Selecione um produto."));
+      return;
+    }
+    Dialog<ButtonType> dialog = new Dialog<>();
+    if (getScene() != null) dialog.initOwner(getScene().getWindow());
+    dialog.setTitle("Saída ou ajuste de estoque");
+    ButtonType save = new ButtonType("Registrar", ButtonBar.ButtonData.OK_DONE);
+    dialog.getDialogPane().getButtonTypes().addAll(save, ButtonType.CANCEL);
+    dialog.getDialogPane().lookupButton(save).setId("stock-movement-save");
+    ComboBox<String> kind =
+        new ComboBox<>(
+            FXCollections.observableArrayList("Saída", "Ajuste: entrada", "Ajuste: redução"));
+    kind.setValue("Saída");
+    TextField quantity = new TextField("1");
+    quantity.setId("stock-movement-quantity");
+    TextField reason = new TextField();
+    reason.setPromptText("Motivo obrigatório");
+    reason.setId("stock-movement-reason");
+    GridPane fields = new GridPane();
+    fields.setHgap(8);
+    fields.setVgap(7);
+    fields.add(new Label("Produto"), 0, 0);
+    fields.add(new Label(selected.product().name()), 1, 0);
+    fields.add(new Label("Tipo"), 0, 1);
+    fields.add(kind, 1, 1);
+    fields.add(new Label("Quantidade"), 0, 2);
+    fields.add(quantity, 1, 2);
+    fields.add(new Label("Motivo"), 0, 3);
+    fields.add(reason, 1, 3);
+    dialog.getDialogPane().setContent(fields);
+    dialog
+        .showAndWait()
+        .filter(save::equals)
+        .ifPresent(
+            ignored -> {
+              try {
+                long qty = toMilli(quantity.getText(), selected.product().unit());
+                String key = UUID.randomUUID().toString();
+                switch (kind.getValue()) {
+                  case "Ajuste: entrada" ->
+                      useCase.adjust(selected.product().id(), qty, reason.getText(), key);
+                  case "Ajuste: redução" ->
+                      useCase.adjust(selected.product().id(), -qty, reason.getText(), key);
+                  default ->
+                      useCase.registerExit(selected.product().id(), qty, reason.getText(), key);
+                }
+                refresh();
+              } catch (RuntimeException failure) {
+                error(failure);
+              }
+            });
+  }
+
+  private void serviceMaterialDialog() {
+    if (services == null) {
+      error(new IllegalStateException("Catálogo de serviços indisponível."));
+      return;
+    }
+    var servicePage =
+        services.searchPage(
+            new ServicePageQuery("", "ALL", false, ServiceSortField.NAME, true, 0, 250));
+    var productPage =
+        repository.searchProducts(
+            new ProductPageQuery("", "ALL", false, false, ProductSortField.NAME, true, 0, 250));
+    ComboBox<BeautyService> service =
+        new ComboBox<>(FXCollections.observableArrayList(servicePage.items()));
+    ComboBox<StockProduct> product =
+        new ComboBox<>(FXCollections.observableArrayList(productPage.items()));
+    service.setConverter(
+        new javafx.util.StringConverter<>() {
+          public String toString(BeautyService value) {
+            return value == null ? "" : value.name();
+          }
+
+          public BeautyService fromString(String value) {
+            return null;
+          }
+        });
+    product.setConverter(
+        new javafx.util.StringConverter<>() {
+          public String toString(StockProduct value) {
+            return value == null
+                ? ""
+                : value.product().name() + " (" + value.product().unit().label() + ")";
+          }
+
+          public StockProduct fromString(String value) {
+            return null;
+          }
+        });
+    if (!service.getItems().isEmpty()) service.setValue(service.getItems().getFirst());
+    if (!product.getItems().isEmpty()) product.setValue(product.getItems().getFirst());
+    TextField quantity = new TextField("1");
+    quantity.setId("service-material-quantity");
+    GridPane fields = new GridPane();
+    fields.setHgap(8);
+    fields.setVgap(7);
+    fields.add(new Label("Serviço"), 0, 0);
+    fields.add(service, 1, 0);
+    fields.add(new Label("Produto"), 0, 1);
+    fields.add(product, 1, 1);
+    fields.add(new Label("Quantidade por atendimento"), 0, 2);
+    fields.add(quantity, 1, 2);
+    Dialog<ButtonType> dialog = new Dialog<>();
+    if (getScene() != null) dialog.initOwner(getScene().getWindow());
+    dialog.setTitle("Materiais consumidos por serviço");
+    ButtonType save = new ButtonType("Configurar", ButtonBar.ButtonData.OK_DONE);
+    dialog.getDialogPane().getButtonTypes().addAll(save, ButtonType.CANCEL);
+    dialog.getDialogPane().lookupButton(save).setId("service-material-save");
+    dialog.getDialogPane().setContent(fields);
+    dialog
+        .showAndWait()
+        .filter(save::equals)
+        .ifPresent(
+            ignored -> {
+              try {
+                if (service.getValue() == null || product.getValue() == null)
+                  throw new IllegalArgumentException("Selecione serviço e produto.");
+                useCase.configureServiceMaterial(
+                    service.getValue().id(),
+                    product.getValue().product().id(),
+                    toMilli(quantity.getText(), product.getValue().product().unit()));
+              } catch (RuntimeException failure) {
+                error(failure);
               }
             });
   }

@@ -18,6 +18,8 @@ import br.com.espacotucuma.desktop.application.identity.CreateFirstAdministrator
 import br.com.espacotucuma.desktop.application.identity.InitialAdministratorSetup;
 import br.com.espacotucuma.desktop.application.identity.SessionContext;
 import br.com.espacotucuma.desktop.application.identity.UserRole;
+import br.com.espacotucuma.desktop.application.inventory.MaintainInventoryUseCase;
+import br.com.espacotucuma.desktop.application.inventory.UnitOfMeasure;
 import br.com.espacotucuma.desktop.application.port.professional.ProfessionalRepository;
 import br.com.espacotucuma.desktop.application.port.service.ServiceRepository;
 import br.com.espacotucuma.desktop.application.scheduling.AppointmentStatus;
@@ -319,6 +321,70 @@ class AppointmentSchedulingSQLiteTest {
           1,
           fixture.scalar(
               "SELECT COUNT(*) FROM evento_auditoria WHERE acao='ATENDIMENTO_CONCLUIDO'"));
+    }
+  }
+
+  @Test
+  void serviceConsumptionBlocksInsufficientStockAndRollsBackWithAttendanceCompletion(
+      @TempDir Path temp) throws Exception {
+    try (Fixture fixture = new Fixture(temp.resolve("attendance-stock.sqlite"))) {
+      var product =
+          fixture.inventory.registerProduct(
+              null, null, "Óleo", "Insumos", UnitOfMeasure.MILILITRO, Money.of("0.10"), null, 0);
+      fixture.inventory.registerEntry(
+          product.id(), 2_000, "Saldo inicial", UUID.randomUUID().toString());
+      fixture.inventory.configureServiceMaterial(fixture.serviceId, product.id(), 1_500);
+
+      var appointment = fixture.createAt(9, 0);
+      fixture.maintain.confirm(appointment.id());
+      var attendance = fixture.attendance.startFromAppointment(appointment.id());
+      fixture.attendance.addService(attendance.id(), fixture.serviceId, 2);
+
+      assertThrows(IllegalStateException.class, () -> fixture.attendance.complete(attendance.id()));
+      assertEquals(2_000, fixture.inventoryRepository.stockOnHand(product.id()));
+      assertEquals(
+          AttendanceStatus.EM_ANDAMENTO, fixture.attendance.findById(attendance.id()).status());
+      assertEquals(
+          AppointmentStatus.EM_ATENDIMENTO, fixture.maintain.findById(appointment.id()).status());
+      assertEquals(
+          0, fixture.scalar("SELECT COUNT(*) FROM movimento_estoque WHERE tipo='CONSUMO_SERVICO'"));
+
+      fixture.inventory.registerEntry(
+          product.id(), 3_000, "Reposição", UUID.randomUUID().toString());
+      fixture.execute(
+          "CREATE TRIGGER trg_test_reject_stock_consumption BEFORE INSERT ON evento_auditoria "
+              + "WHEN NEW.acao='ESTOQUE_CONSUMIDO_POR_SERVICO' BEGIN SELECT RAISE(ABORT,'consumo audit rejeitado'); END");
+      assertThrows(IllegalStateException.class, () -> fixture.attendance.complete(attendance.id()));
+      assertEquals(5_000, fixture.inventoryRepository.stockOnHand(product.id()));
+      assertEquals(
+          AttendanceStatus.EM_ANDAMENTO, fixture.attendance.findById(attendance.id()).status());
+      assertEquals(
+          0, fixture.scalar("SELECT COUNT(*) FROM movimento_estoque WHERE tipo='CONSUMO_SERVICO'"));
+      assertEquals(
+          0,
+          fixture.scalar(
+              "SELECT COUNT(*) FROM operacao_pendente WHERE tipo_operacao='ESTOQUE_CONSUMIDO_POR_SERVICO'"));
+      fixture.execute("DROP TRIGGER trg_test_reject_stock_consumption");
+
+      fixture.attendance.complete(attendance.id());
+      assertEquals(2_000, fixture.inventoryRepository.stockOnHand(product.id()));
+      assertEquals(
+          1, fixture.scalar("SELECT COUNT(*) FROM movimento_estoque WHERE tipo='CONSUMO_SERVICO'"));
+      assertThrows(IllegalStateException.class, () -> fixture.attendance.complete(attendance.id()));
+      assertEquals(2_000, fixture.inventoryRepository.stockOnHand(product.id()));
+
+      UUID consumeMovement =
+          UUID.fromString(
+              fixture.string("SELECT id FROM movimento_estoque WHERE tipo='CONSUMO_SERVICO'"));
+      fixture.inventory.reverseMovement(
+          consumeMovement, "Atendimento revertido", UUID.randomUUID().toString());
+      assertEquals(5_000, fixture.inventoryRepository.stockOnHand(product.id()));
+      assertEquals(
+          1,
+          fixture.scalar(
+              "SELECT COUNT(*) FROM movimento_estoque WHERE movimento_origem_id='"
+                  + consumeMovement
+                  + "'"));
     }
   }
 
@@ -668,6 +734,8 @@ class AppointmentSchedulingSQLiteTest {
     final SqliteClientRepository clients;
     final ProfessionalRepository professionals;
     final ServiceRepository services;
+    final SqliteInventoryRepository inventoryRepository;
+    final MaintainInventoryUseCase inventory;
     final SqliteAppointmentRepository appointments;
     final MaintainAppointmentUseCase maintain;
     final MaintainAttendanceUseCase attendance;
@@ -716,6 +784,16 @@ class AppointmentSchedulingSQLiteTest {
       clients = new SqliteClientRepository(database.connection(), unitOfWork);
       professionals = new SqliteProfessionalRepository(database.connection(), unitOfWork);
       services = new SqliteServiceRepository(database.connection(), unitOfWork);
+      inventoryRepository = new SqliteInventoryRepository(database.connection(), unitOfWork);
+      inventory =
+          new MaintainInventoryUseCase(
+              unitOfWork,
+              inventoryRepository,
+              outbox,
+              authorization,
+              audit,
+              STATION,
+              Clock.fixed(NOW, ZoneId.of("America/Manaus")));
       appointments = new SqliteAppointmentRepository(database.connection(), unitOfWork);
       var commissionRules = new SqliteCommissionRuleRepository(database.connection(), unitOfWork);
       insertFixtures();
@@ -742,6 +820,7 @@ class AppointmentSchedulingSQLiteTest {
               authorization,
               audit,
               STATION,
+              inventory,
               Clock.fixed(NOW, ZoneId.of("America/Manaus")));
       payments =
           new RegisterPaymentUseCase(
