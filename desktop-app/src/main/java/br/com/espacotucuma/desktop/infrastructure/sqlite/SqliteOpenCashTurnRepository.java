@@ -42,6 +42,15 @@ public final class SqliteOpenCashTurnRepository implements OpenCashTurnRepositor
   @Override
   public UUID recordReceipt(UUID turnId, Payment payment, Instant recordedAt) {
     requireTransaction();
+    try (PreparedStatement check =
+        connection.prepareStatement("SELECT 1 FROM caixa_turno WHERE id=? AND estado='ABERTO'")) {
+      check.setString(1, turnId.toString());
+      try (ResultSet rows = check.executeQuery()) {
+        if (!rows.next()) throw new IllegalStateException("O caixa está fechado.");
+      }
+    } catch (SQLException failure) {
+      throw new IllegalStateException("Não foi possível validar o estado do caixa.", failure);
+    }
     UUID movementId = UUID.randomUUID();
     String sql =
         "INSERT INTO movimento_caixa (id,caixa_turno_id,recebimento_id,tipo,valor_centavos,motivo,"

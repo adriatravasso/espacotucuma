@@ -61,6 +61,8 @@ public final class TucumaDesktopApplication extends Application {
             runtime.maintainAttendance(),
             runtime.prepaidPackages(),
             runtime.registerPayment());
+    CashRegisterPane cashPane =
+        new CashRegisterPane(runtime.manageCashTurn(), runtime.authorization());
     shell =
         new TucumaMainShell(
             runtime::protectionStatus,
@@ -80,7 +82,8 @@ public final class TucumaDesktopApplication extends Application {
                 runtime.commissionRules(),
                 runtime.professionals()),
             packagesView,
-            appointmentPane);
+            appointmentPane,
+            cashPane);
     appointmentPane.setMutationListener(shell::refreshStatus);
     shell.setLogoutAction(
         () -> {

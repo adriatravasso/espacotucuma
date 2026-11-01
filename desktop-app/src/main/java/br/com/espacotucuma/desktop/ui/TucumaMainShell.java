@@ -37,6 +37,7 @@ final class TucumaMainShell {
   private final Parent servicesView;
   private final Parent packagesView;
   private final Parent appointmentsView;
+  private final Parent cashView;
   private final Timeline statusRefresh;
   private Runnable logoutAction = () -> {};
   private String activeModule = "Início";
@@ -88,12 +89,31 @@ final class TucumaMainShell {
       Parent servicesView,
       Parent packagesView,
       Parent appointmentsView) {
+    this(
+        statusLoader,
+        clientsView,
+        professionalsView,
+        servicesView,
+        packagesView,
+        appointmentsView,
+        null);
+  }
+
+  TucumaMainShell(
+      Supplier<ProtectionStatus> statusLoader,
+      Parent clientsView,
+      Parent professionalsView,
+      Parent servicesView,
+      Parent packagesView,
+      Parent appointmentsView,
+      Parent cashView) {
     this.statusLoader = statusLoader;
     this.clientsView = clientsView;
     this.professionalsView = professionalsView;
     this.servicesView = servicesView;
     this.packagesView = packagesView;
     this.appointmentsView = appointmentsView;
+    this.cashView = cashView;
     root.setTop(new VBox(createMenuBar(), createToolBar()));
     root.setLeft(createNavigation());
     root.setCenter(workArea);
@@ -147,6 +167,9 @@ final class TucumaMainShell {
     if (activeModule.equals("Agenda")
         && appointmentsView instanceof AppointmentRegistryPane appointmentPane) {
       appointmentPane.refreshAccess();
+    }
+    if (activeModule.equals("Caixa") && cashView instanceof CashRegisterPane cashPane) {
+      cashPane.refresh();
     }
   }
 
@@ -271,6 +294,9 @@ final class TucumaMainShell {
       appointmentPane.refreshAccess();
       appointmentPane.refresh();
       workArea.setCenter(appointmentPane);
+    } else if (module.equals("Caixa") && cashView instanceof CashRegisterPane cashPane) {
+      cashPane.refresh();
+      workArea.setCenter(cashPane);
     } else {
       workArea.setCenter(placeholder);
     }
