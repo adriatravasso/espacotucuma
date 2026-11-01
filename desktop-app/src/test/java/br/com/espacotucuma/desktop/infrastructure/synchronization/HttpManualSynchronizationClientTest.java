@@ -8,7 +8,9 @@ import br.com.espacotucuma.desktop.application.outbox.PendingOperation;
 import br.com.espacotucuma.desktop.application.outbox.ServerConfirmation;
 import br.com.espacotucuma.desktop.application.port.outbox.OutboxRepository;
 import br.com.espacotucuma.desktop.application.port.synchronization.DeviceCredentialStore;
+import br.com.espacotucuma.desktop.application.port.synchronization.RemoteChangeRepository;
 import br.com.espacotucuma.desktop.application.port.transaction.UnitOfWork;
+import br.com.espacotucuma.sync.contract.ChangesResponse;
 import br.com.espacotucuma.sync.contract.OperationResult;
 import br.com.espacotucuma.sync.contract.OperationsResponse;
 import br.com.espacotucuma.sync.contract.OperationsStatusResponse;
@@ -54,7 +56,8 @@ class HttpManualSynchronizationClientTest {
             response(status(List.of())),
             new IOException("connection dropped after the first remote commit"),
             response(status(List.of(acceptedFirst))),
-            response(operations(List.of(accepted(second.id())))));
+            response(operations(List.of(accepted(second.id())))),
+            response(changes(0, List.of())));
 
     client(outbox, http).synchronizeNow();
 
@@ -66,7 +69,8 @@ class HttpManualSynchronizationClientTest {
             "/sync/operations/status",
             "/sync/operations",
             "/sync/operations/status",
-            "/sync/operations"),
+            "/sync/operations",
+            "/sync/changes"),
         http.paths);
     assertEquals(first.payloadJson(), outbox.originalPayloads.get(first.id()));
     assertEquals(second.idempotencyKey(), outbox.originalKeys.get(second.id()));
@@ -101,7 +105,8 @@ class HttpManualSynchronizationClientTest {
         new SimulatedHttpClient(
             response("{\"accessToken\":\"token\"}"),
             response(status(List.of())),
-            response(operations(List.of(accepted, accepted))));
+            response(operations(List.of(accepted, accepted))),
+            response(changes(0, List.of())));
 
     client(outbox, http).synchronizeNow();
 
@@ -109,8 +114,80 @@ class HttpManualSynchronizationClientTest {
     assertEquals(List.of(operation.id()), outbox.confirmations);
   }
 
+  @Test
+  void downloadsRemotePagesInSequenceAndPersistsBeforeRequestingNextPage() throws Exception {
+    List<ChangesResponse.RemoteChange> firstPage =
+        java.util.stream.LongStream.rangeClosed(1, 100)
+            .mapToObj(HttpManualSynchronizationClientTest::remoteChange)
+            .toList();
+    MemoryRemoteChanges changes = new MemoryRemoteChanges();
+    SimulatedHttpClient http =
+        new SimulatedHttpClient(
+            response("{\"accessToken\":\"token\"}"),
+            response(changes(100, firstPage)),
+            response(changes(100, List.of())));
+
+    client(new MemoryOutbox(List.of()), changes, http).synchronizeNow();
+
+    assertEquals(100, changes.checkpoint);
+    assertEquals(100, changes.applied.getFirst().changes().size());
+    assertEquals(List.of("/sync/devices/token", "/sync/changes", "/sync/changes"), http.paths);
+  }
+
+  @Test
+  void malformedOutOfOrderPageIsRejectedWithoutAdvancingCheckpoint() throws Exception {
+    MemoryRemoteChanges changes = new MemoryRemoteChanges();
+    SimulatedHttpClient http =
+        new SimulatedHttpClient(
+            response("{\"accessToken\":\"token\"}"),
+            response(changes(2, List.of(remoteChange(2), remoteChange(1)))));
+
+    assertThrows(
+        IllegalStateException.class,
+        () -> client(new MemoryOutbox(List.of()), changes, http).synchronizeNow());
+
+    assertEquals(0, changes.checkpoint);
+    assertTrue(changes.applied.isEmpty());
+  }
+
+  @Test
+  void interruptedDownloadResumesFromLastCommittedCheckpoint() throws Exception {
+    List<ChangesResponse.RemoteChange> firstPage =
+        java.util.stream.LongStream.rangeClosed(1, 100)
+            .mapToObj(HttpManualSynchronizationClientTest::remoteChange)
+            .toList();
+    MemoryRemoteChanges changes = new MemoryRemoteChanges();
+    SimulatedHttpClient interrupted =
+        new SimulatedHttpClient(
+            response("{\"accessToken\":\"token\"}"),
+            response(changes(100, firstPage)),
+            new IOException("network dropped before the second page"));
+
+    assertThrows(
+        IllegalStateException.class,
+        () -> client(new MemoryOutbox(List.of()), changes, interrupted).synchronizeNow());
+    assertEquals(100, changes.checkpoint);
+
+    SimulatedHttpClient resumed =
+        new SimulatedHttpClient(
+            response("{\"accessToken\":\"token\"}"),
+            response(changes(101, List.of(remoteChange(101)))),
+            response(changes(101, List.of())));
+    client(new MemoryOutbox(List.of()), changes, resumed).synchronizeNow();
+
+    assertEquals(101, changes.checkpoint);
+    assertEquals(100, changes.applied.getFirst().changes().size());
+    assertEquals(1, changes.applied.get(1).changes().size());
+    assertTrue(resumed.paths.contains("/sync/changes"));
+  }
+
   private static HttpManualSynchronizationClient client(
       MemoryOutbox outbox, SimulatedHttpClient http) {
+    return client(outbox, new MemoryRemoteChanges(), http);
+  }
+
+  private static HttpManualSynchronizationClient client(
+      MemoryOutbox outbox, MemoryRemoteChanges remoteChanges, SimulatedHttpClient http) {
     DeviceCredentialStore credentials =
         new DeviceCredentialStore() {
           public void save(UUID deviceId, String credential) {}
@@ -132,6 +209,7 @@ class HttpManualSynchronizationClientTest {
         DEVICE_ID,
         credentials,
         outbox,
+        remoteChanges,
         unitOfWork,
         http,
         JSON,
@@ -163,6 +241,41 @@ class HttpManualSynchronizationClientTest {
 
   private static String operations(List<OperationResult> results) throws IOException {
     return JSON.writeValueAsString(new OperationsResponse(1, results.size(), results));
+  }
+
+  private static String changes(long checkpoint, List<ChangesResponse.RemoteChange> changes)
+      throws IOException {
+    return JSON.writeValueAsString(new ChangesResponse(1, checkpoint, changes));
+  }
+
+  private static ChangesResponse.RemoteChange remoteChange(long sequence) {
+    return new ChangesResponse.RemoteChange(
+        sequence,
+        UUID.nameUUIDFromBytes(
+            ("remote-operation-" + sequence).getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+        UUID.fromString("30000000-0000-0000-0000-000000000001"),
+        "cliente",
+        UUID.fromString("40000000-0000-0000-0000-000000000001"),
+        "CLIENTE_CRIADO",
+        1,
+        sequence,
+        "ACEITA",
+        Map.of("nome", "Pessoa sintética"));
+  }
+
+  private static final class MemoryRemoteChanges implements RemoteChangeRepository {
+    private long checkpoint;
+    private final List<ChangesResponse> applied = new ArrayList<>();
+
+    public long checkpoint() {
+      return checkpoint;
+    }
+
+    public void applyPage(long expectedCheckpoint, ChangesResponse page) {
+      if (expectedCheckpoint != checkpoint) throw new IllegalStateException("stale cursor");
+      applied.add(page);
+      checkpoint = page.checkpoint();
+    }
   }
 
   private static HttpResponse<String> response(String body) {

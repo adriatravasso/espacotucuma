@@ -144,8 +144,8 @@ class DeviceAuthenticationIntegrationTest {
   @Test
   void versionedContractRejectsUnsupportedVersionsUnknownFieldsAndMalformedPayloads()
       throws Exception {
-    AccessToken token =
-        issueAccessToken(pair(enrollNewEstablishment("Salão de teste").pairingCode(), "Principal"));
+    Pairing pairing = pair(enrollNewEstablishment("Salão de teste").pairingCode(), "Principal");
+    AccessToken token = issueAccessToken(pairing);
     String authorization = "Bearer " + token.accessToken();
 
     mockMvc
@@ -190,6 +190,40 @@ class DeviceAuthenticationIntegrationTest {
         objectMapper.readValue(
             accepted.getResponse().getContentAsString(), OperationsResponse.class);
     assertEquals(1, acceptedResponse.results().size());
+
+    mockMvc
+        .perform(
+            get("/sync/changes")
+                .param("after", "0")
+                .param("limit", "1")
+                .header("Authorization", authorization)
+                .header(SyncContract.VERSION_HEADER, "1"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.contractVersion").value(1))
+        .andExpect(jsonPath("$.checkpoint").value(acceptedResponse.checkpoint()))
+        .andExpect(jsonPath("$.changes.length()").value(1))
+        .andExpect(
+            jsonPath("$.changes[0].operationId")
+                .value(acceptedResponse.results().getFirst().operationId().toString()))
+        .andExpect(jsonPath("$.changes[0].sourceDeviceId").value(pairing.deviceId().toString()))
+        .andExpect(jsonPath("$.changes[0].outcome").value("ACEITA"));
+    mockMvc
+        .perform(
+            get("/sync/changes")
+                .param("after", Long.toString(acceptedResponse.checkpoint()))
+                .header("Authorization", authorization)
+                .header(SyncContract.VERSION_HEADER, "1"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.checkpoint").value(acceptedResponse.checkpoint()))
+        .andExpect(jsonPath("$.changes.length()").value(0));
+    mockMvc
+        .perform(
+            get("/sync/changes")
+                .param("after", "0")
+                .param("limit", "101")
+                .header("Authorization", authorization)
+                .header(SyncContract.VERSION_HEADER, "1"))
+        .andExpect(status().isBadRequest());
 
     mockMvc
         .perform(

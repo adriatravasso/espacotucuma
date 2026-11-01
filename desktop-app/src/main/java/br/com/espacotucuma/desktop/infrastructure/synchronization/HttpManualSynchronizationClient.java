@@ -5,7 +5,9 @@ import br.com.espacotucuma.desktop.application.outbox.ServerConfirmation;
 import br.com.espacotucuma.desktop.application.port.outbox.OutboxRepository;
 import br.com.espacotucuma.desktop.application.port.synchronization.DeviceCredentialStore;
 import br.com.espacotucuma.desktop.application.port.synchronization.ManualSynchronizationPort;
+import br.com.espacotucuma.desktop.application.port.synchronization.RemoteChangeRepository;
 import br.com.espacotucuma.desktop.application.port.transaction.UnitOfWork;
+import br.com.espacotucuma.sync.contract.ChangesResponse;
 import br.com.espacotucuma.sync.contract.OperationResult;
 import br.com.espacotucuma.sync.contract.OperationSubmission;
 import br.com.espacotucuma.sync.contract.OperationsRequest;
@@ -32,6 +34,7 @@ import java.util.UUID;
 /** Sends pending outbox records only when explicitly invoked by the operator. */
 public final class HttpManualSynchronizationClient implements ManualSynchronizationPort {
   private static final int BATCH_SIZE = 20;
+  private static final int CHANGE_PAGE_SIZE = 100;
   private static final int MAX_ATTEMPTS = 2;
   private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(15);
   private static final TypeReference<Map<String, Object>> JSON_OBJECT = new TypeReference<>() {};
@@ -40,6 +43,7 @@ public final class HttpManualSynchronizationClient implements ManualSynchronizat
   private final UUID deviceId;
   private final DeviceCredentialStore credentials;
   private final OutboxRepository outbox;
+  private final RemoteChangeRepository remoteChanges;
   private final UnitOfWork unitOfWork;
   private final HttpClient http;
   private final ObjectMapper json;
@@ -50,12 +54,14 @@ public final class HttpManualSynchronizationClient implements ManualSynchronizat
       UUID deviceId,
       DeviceCredentialStore credentials,
       OutboxRepository outbox,
+      RemoteChangeRepository remoteChanges,
       UnitOfWork unitOfWork) {
     this(
         serviceBaseUri,
         deviceId,
         credentials,
         outbox,
+        remoteChanges,
         unitOfWork,
         HttpClient.newBuilder().connectTimeout(REQUEST_TIMEOUT).build(),
         new ObjectMapper(),
@@ -67,6 +73,7 @@ public final class HttpManualSynchronizationClient implements ManualSynchronizat
       UUID deviceId,
       DeviceCredentialStore credentials,
       OutboxRepository outbox,
+      RemoteChangeRepository remoteChanges,
       UnitOfWork unitOfWork,
       HttpClient http,
       ObjectMapper json,
@@ -75,6 +82,7 @@ public final class HttpManualSynchronizationClient implements ManualSynchronizat
     this.deviceId = Objects.requireNonNull(deviceId, "deviceId");
     this.credentials = Objects.requireNonNull(credentials, "credentials");
     this.outbox = Objects.requireNonNull(outbox, "outbox");
+    this.remoteChanges = Objects.requireNonNull(remoteChanges, "remoteChanges");
     this.unitOfWork = Objects.requireNonNull(unitOfWork, "unitOfWork");
     this.http = Objects.requireNonNull(http, "http");
     this.json = Objects.requireNonNull(json, "json");
@@ -93,7 +101,7 @@ public final class HttpManualSynchronizationClient implements ManualSynchronizat
     String token = requestAccessToken(credential);
     while (true) {
       List<PendingOperation> batch = outbox.findPending(BATCH_SIZE);
-      if (batch.isEmpty()) return;
+      if (batch.isEmpty()) break;
       for (PendingOperation operation : batch) {
         unitOfWork.execute(() -> outbox.recordAttempt(operation.id()));
       }
@@ -101,7 +109,71 @@ public final class HttpManualSynchronizationClient implements ManualSynchronizat
         throw new IllegalStateException(
             "O serviço não confirmou todas as operações; as restantes continuam pendentes.");
       }
-      if (batch.size() < BATCH_SIZE) return;
+      if (batch.size() < BATCH_SIZE) break;
+    }
+    synchronizeChanges(token);
+  }
+
+  private void synchronizeChanges(String token) {
+    while (true) {
+      long checkpoint = remoteChanges.checkpoint();
+      HttpRequest request =
+          versionedRequest(
+                  "/sync/changes?after=" + checkpoint + "&limit=" + CHANGE_PAGE_SIZE, token)
+              .GET()
+              .build();
+      ChangesResponse page;
+      try {
+        HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() != 200) throw httpFailure(response.statusCode());
+        page = json.readValue(response.body(), ChangesResponse.class);
+      } catch (IOException failure) {
+        throw new IllegalStateException("Não foi possível baixar as alterações remotas.", failure);
+      } catch (InterruptedException cancelled) {
+        Thread.currentThread().interrupt();
+        throw new IllegalStateException(
+            "Sincronização cancelada durante o download incremental.", cancelled);
+      }
+      validateChangePage(page, checkpoint);
+      unitOfWork.execute(
+          () -> {
+            remoteChanges.applyPage(checkpoint, page);
+            return null;
+          });
+      if (page.changes().size() < CHANGE_PAGE_SIZE) return;
+    }
+  }
+
+  private static void validateChangePage(ChangesResponse page, long after) {
+    if (page == null
+        || page.contractVersion() != SyncContract.VERSION
+        || page.changes() == null
+        || page.changes().size() > CHANGE_PAGE_SIZE) {
+      throw new IllegalStateException("Resposta incremental incompatível com o contrato.");
+    }
+    long previous = after;
+    java.util.Set<UUID> operations = new java.util.HashSet<>();
+    for (ChangesResponse.RemoteChange change : page.changes()) {
+      if (change == null
+          || change.sequence() <= previous
+          || change.operationId() == null
+          || !operations.add(change.operationId())
+          || change.sourceDeviceId() == null
+          || change.entityType() == null
+          || change.entityId() == null
+          || change.operationType() == null
+          || change.payloadVersion() < 1
+          || change.entityVersion() < 0
+          || change.outcome() == null
+          || change.payload() == null) {
+        throw new IllegalStateException(
+            "O lote incremental contém dados malformados ou fora de ordem.");
+      }
+      previous = change.sequence();
+    }
+    long expected = page.changes().isEmpty() ? after : previous;
+    if (page.checkpoint() != expected) {
+      throw new IllegalStateException("O cursor remoto não corresponde ao lote recebido.");
     }
   }
 
