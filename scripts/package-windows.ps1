@@ -68,6 +68,7 @@ $jpackageArgs = @(
     '--main-class', $mainClass,
     '--icon', $icon,
     '--add-modules', 'java.base,java.desktop,java.logging,java.naming,java.net.http,java.prefs,java.sql,java.xml,jdk.crypto.ec,jdk.unsupported',
+    '--install-dir', 'EspacoTucuma',
     '--win-upgrade-uuid', '4f9323ec-ec1e-4d5b-9edc-5bfbac7a62ab',
     '--win-per-user-install',
     '--win-menu',

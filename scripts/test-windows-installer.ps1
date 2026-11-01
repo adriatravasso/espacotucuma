@@ -6,7 +6,7 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $output = [System.IO.Path]::GetFullPath($OutputDirectory, $repoRoot)
 $work = Join-Path $output 'validation'
-$installDirectory = Join-Path $output 'installed-app'
+$installDirectory = Join-Path $env:LOCALAPPDATA 'EspacoTucuma'
 $dataRoot = Join-Path $output 'external-user-data'
 $javaHome = $env:JAVA_HOME
 $java = Join-Path $javaHome 'bin\java.exe'
@@ -25,7 +25,7 @@ function Assert-NativeExit([string] $Action) {
 }
 
 function Install-Package([string] $Path) {
-    $args = @('/i', $Path, '/quiet', '/norestart', 'INSTALLDIR=' + $installDirectory)
+    $args = @('/i', $Path, '/quiet', '/norestart')
     & msiexec.exe @args
     if ($LASTEXITCODE -notin @(0, 3010)) { throw "Instalação de $Path falhou: $LASTEXITCODE" }
     $script:installed = $true

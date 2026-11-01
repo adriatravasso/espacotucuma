@@ -8,7 +8,7 @@ O instalador MSI é criado por `scripts/package-windows.ps1` com JDK 21, Maven e
 
 O resultado fica em `desktop-app/target/windows-installer/`. O jpackage cria um runtime Java reduzido junto ao aplicativo, por isso a máquina da recepção não precisa de Java, Maven ou conexão com a internet. O identificador estável de upgrade permite que uma versão nova substitua a instalada.
 
-Por padrão, os dados ficam em `%USERPROFILE%\.espacotucuma\development`; o SQLite, as preferências e os logs permanecem fora da pasta de instalação. `TUCUMA_DATA_ROOT` permite configurar outra raiz de dados por usuário. As rotinas de migração executam no início do aplicativo e preservam o banco existente; o MSI não inclui um banco.
+O aplicativo fica em `%LOCALAPPDATA%\EspacoTucuma`. Por padrão, os dados ficam em `%USERPROFILE%\.espacotucuma\development`; o SQLite, as preferências e os logs permanecem fora da pasta de instalação. `TUCUMA_DATA_ROOT` permite configurar outra raiz de dados por usuário. As rotinas de migração executam no início do aplicativo e preservam o banco existente; o MSI não inclui um banco.
 
 Valide o ciclo em Windows com:
 
