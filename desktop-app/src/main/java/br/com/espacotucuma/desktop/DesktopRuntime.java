@@ -16,8 +16,10 @@ import br.com.espacotucuma.desktop.application.identity.LogoutUseCase;
 import br.com.espacotucuma.desktop.application.identity.SessionContext;
 import br.com.espacotucuma.desktop.application.port.client.ClientRepository;
 import br.com.espacotucuma.desktop.application.port.commission.CommissionRuleRepository;
+import br.com.espacotucuma.desktop.application.port.prepaid.PrepaidPackageRepository;
 import br.com.espacotucuma.desktop.application.port.professional.ProfessionalRepository;
 import br.com.espacotucuma.desktop.application.port.service.ServiceRepository;
+import br.com.espacotucuma.desktop.application.prepaid.MaintainPrepaidPackagesUseCase;
 import br.com.espacotucuma.desktop.application.professional.MaintainProfessionalUseCase;
 import br.com.espacotucuma.desktop.application.service.MaintainServiceUseCase;
 import br.com.espacotucuma.desktop.infrastructure.security.Pbkdf2PasswordHasher;
@@ -28,6 +30,7 @@ import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteCommissionRuleRep
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteInitialSetupRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteLocalCredentialRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteOutboxRepository;
+import br.com.espacotucuma.desktop.infrastructure.sqlite.SqlitePrepaidPackageRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteProfessionalRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteProtectionStatusRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteServiceRepository;
@@ -56,6 +59,8 @@ public final class DesktopRuntime implements AutoCloseable {
   private final CommissionRuleRepository commissionRules;
   private final MaintainCommissionRuleUseCase maintainCommissionRule;
   private final CommissionService commissions;
+  private final PrepaidPackageRepository prepaidPackages;
+  private final MaintainPrepaidPackagesUseCase maintainPrepaidPackages;
   private final AuthorizationService authorization;
   private final CreateFirstAdministratorUseCase createFirstAdministrator;
   private final ChangeLocalPasswordUseCase changeLocalPassword;
@@ -80,6 +85,8 @@ public final class DesktopRuntime implements AutoCloseable {
       CommissionRuleRepository commissionRules,
       MaintainCommissionRuleUseCase maintainCommissionRule,
       CommissionService commissions,
+      PrepaidPackageRepository prepaidPackages,
+      MaintainPrepaidPackagesUseCase maintainPrepaidPackages,
       AuthorizationService authorization,
       CreateFirstAdministratorUseCase createFirstAdministrator,
       ChangeLocalPasswordUseCase changeLocalPassword,
@@ -102,6 +109,8 @@ public final class DesktopRuntime implements AutoCloseable {
     this.commissionRules = commissionRules;
     this.maintainCommissionRule = maintainCommissionRule;
     this.commissions = commissions;
+    this.prepaidPackages = prepaidPackages;
+    this.maintainPrepaidPackages = maintainPrepaidPackages;
     this.authorization = authorization;
     this.createFirstAdministrator = createFirstAdministrator;
     this.changeLocalPassword = changeLocalPassword;
@@ -189,6 +198,17 @@ public final class DesktopRuntime implements AutoCloseable {
               stationId);
       CommissionService commissions =
           new CommissionService(commissionRules, unitOfWork, authorization);
+      PrepaidPackageRepository prepaidPackages =
+          new SqlitePrepaidPackageRepository(database.connection(), unitOfWork);
+      MaintainPrepaidPackagesUseCase maintainPrepaidPackages =
+          new MaintainPrepaidPackagesUseCase(
+              unitOfWork,
+              prepaidPackages,
+              clients,
+              new SqliteOutboxRepository(database.connection(), unitOfWork),
+              authorization,
+              audit,
+              stationId);
       CreateFirstAdministratorUseCase createFirstAdministrator =
           new CreateFirstAdministratorUseCase(
               unitOfWork,
@@ -228,6 +248,8 @@ public final class DesktopRuntime implements AutoCloseable {
           commissionRules,
           maintainCommissionRule,
           commissions,
+          prepaidPackages,
+          maintainPrepaidPackages,
           authorization,
           createFirstAdministrator,
           changeLocalPassword,
@@ -289,6 +311,14 @@ public final class DesktopRuntime implements AutoCloseable {
 
   public CommissionService commissions() {
     return commissions;
+  }
+
+  public PrepaidPackageRepository prepaidPackages() {
+    return prepaidPackages;
+  }
+
+  public MaintainPrepaidPackagesUseCase maintainPrepaidPackages() {
+    return maintainPrepaidPackages;
   }
 
   public AuthorizationService authorization() {
