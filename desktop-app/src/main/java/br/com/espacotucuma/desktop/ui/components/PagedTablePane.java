@@ -5,7 +5,12 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.function.Consumer;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ForkJoinPool;
+import java.util.function.BooleanSupplier;
+import java.util.function.Function;
+import javafx.application.Platform;
 import javafx.collections.FXCollections;
 import javafx.geometry.Insets;
 import javafx.scene.control.Button;
@@ -35,6 +40,7 @@ public final class PagedTablePane<T> extends BorderPane {
   private final Button sortDirection = new Button("↑ Crescente");
   private final Button newRecord = new Button("Novo");
   private final Button editRecord = new Button("Editar");
+  private final Button printPreview = new Button("Prévia / Imprimir");
   private final Button previous = new Button("Anterior");
   private final Button next = new Button("Próxima");
   private final Label pageInfo = new Label();
@@ -43,7 +49,9 @@ public final class PagedTablePane<T> extends BorderPane {
   private final Map<String, String> sortLabels;
   private final PageLoader<T> loader;
   private final int pageSize;
+  private final Executor queryExecutor;
   private int pageIndex;
+  private long loadGeneration;
   private boolean ascending = true;
 
   public PagedTablePane(
@@ -52,11 +60,32 @@ public final class PagedTablePane<T> extends BorderPane {
       Map<String, String> sortOptions,
       int pageSize,
       PageLoader<T> loader,
-      Runnable onNew,
-      Consumer<T> onEdit) {
+      BooleanSupplier onNew,
+      Function<T, Boolean> onEdit) {
+    this(
+        columns,
+        filterOptions,
+        sortOptions,
+        pageSize,
+        loader,
+        onNew,
+        onEdit,
+        ForkJoinPool.commonPool());
+  }
+
+  public PagedTablePane(
+      List<TableColumn<T, ?>> columns,
+      Map<String, String> filterOptions,
+      Map<String, String> sortOptions,
+      int pageSize,
+      PageLoader<T> loader,
+      BooleanSupplier onNew,
+      Function<T, Boolean> onEdit,
+      Executor queryExecutor) {
     this.filterLabels = new LinkedHashMap<>(filterOptions);
     this.sortLabels = new LinkedHashMap<>(sortOptions);
     this.loader = Objects.requireNonNull(loader, "loader");
+    this.queryExecutor = Objects.requireNonNull(queryExecutor, "queryExecutor");
     if (pageSize < 1 || pageSize > 100) {
       throw new IllegalArgumentException("O tamanho da página deve estar entre 1 e 100.");
     }
@@ -74,13 +103,20 @@ public final class PagedTablePane<T> extends BorderPane {
     sortDirection.setId("tableSortDirection");
     newRecord.setId("tableNew");
     newRecord.setDisable(onNew == null);
+    newRecord.setAccessibleHelp(
+        onNew == null ? "Novo registro indisponível nesta área." : "Criar registro local.");
     newRecord.setTooltip(
         new Tooltip(onNew == null ? "Novo registro indisponível nesta área." : "Criar registro."));
     editRecord.setId("tableEdit");
     editRecord.setDisable(true);
+    editRecord.setAccessibleHelp(
+        onEdit == null ? "Edição indisponível nesta área." : "Editar o registro selecionado.");
     editRecord.setTooltip(
         new Tooltip(
             onEdit == null ? "Edição indisponível nesta área." : "Editar registro selecionado."));
+    printPreview.setId("tablePrintPreview");
+    printPreview.setAccessibleHelp("Abrir uma prévia imprimível da página atual.");
+    printPreview.setTooltip(new Tooltip("Abrir prévia do resultado local atual."));
     table.setId("dataTable");
     table.getColumns().setAll(columns);
     table.getColumns().forEach(column -> column.setSortable(false));
@@ -91,6 +127,7 @@ public final class PagedTablePane<T> extends BorderPane {
     pageInfo.setId("pageInfo");
     message.setId("tableMessage");
     message.setWrapText(true);
+    message.setAccessibleHelp("Estado das consultas e confirmações de gravação local.");
     search.addEventFilter(KeyEvent.KEY_PRESSED, this::handleRefreshKey);
     table.addEventFilter(KeyEvent.KEY_PRESSED, this::handleRefreshKey);
     addEventFilter(KeyEvent.KEY_PRESSED, this::handleRefreshKey);
@@ -99,7 +136,16 @@ public final class PagedTablePane<T> extends BorderPane {
     Label sortLabel = new Label("Ordenar por:");
     HBox controls =
         new HBox(
-            6, newRecord, editRecord, search, filterLabel, filter, sortLabel, sort, sortDirection);
+            6,
+            newRecord,
+            editRecord,
+            printPreview,
+            search,
+            filterLabel,
+            filter,
+            sortLabel,
+            sort,
+            sortDirection);
     controls.setPadding(new Insets(7));
     HBox pagination = new HBox(6, previous, pageInfo, next);
     pagination.setPadding(new Insets(7));
@@ -108,7 +154,19 @@ public final class PagedTablePane<T> extends BorderPane {
     setCenter(table);
     setBottom(footer);
 
-    if (onNew != null) newRecord.setOnAction(event -> onNew.run());
+    if (onNew != null) {
+      newRecord.setOnAction(
+          event -> {
+            try {
+              if (onNew.getAsBoolean()) {
+                pageIndex = 0;
+                loadPage("Registro salvo localmente.");
+              }
+            } catch (RuntimeException failure) {
+              setMessage("Não foi possível concluir a operação local. Tente novamente.");
+            }
+          });
+    }
     if (onEdit != null) {
       table
           .getSelectionModel()
@@ -119,9 +177,24 @@ public final class PagedTablePane<T> extends BorderPane {
       editRecord.setOnAction(
           event -> {
             T selectedItem = table.getSelectionModel().getSelectedItem();
-            if (selectedItem != null) onEdit.accept(selectedItem);
+            if (selectedItem != null) {
+              try {
+                if (Boolean.TRUE.equals(onEdit.apply(selectedItem))) {
+                  loadPage("Alterações salvas localmente.");
+                }
+              } catch (RuntimeException failure) {
+                setMessage("Não foi possível concluir a operação local. Tente novamente.");
+              }
+            }
           });
     }
+    printPreview.setOnAction(
+        event ->
+            new TucumaPrintPreviewDialog(
+                    getScene() == null ? null : getScene().getWindow(),
+                    "Resultado da consulta local",
+                    printableRows())
+                .showAndWait());
 
     search.textProperty().addListener((observable, oldValue, newValue) -> reloadFromFirstPage());
     filter.valueProperty().addListener((observable, oldValue, newValue) -> reloadFromFirstPage());
@@ -163,27 +236,85 @@ public final class PagedTablePane<T> extends BorderPane {
   }
 
   private void loadPage() {
-    message.setText("");
-    try {
-      Page<T> page = loader.load(request());
-      int pageCount = page.pageCount();
-      if (pageCount > 0 && pageIndex >= pageCount) {
-        pageIndex = pageCount - 1;
-        page = loader.load(request());
-      }
-      table.setItems(FXCollections.observableArrayList(page.items()));
-      pageInfo.setText(
-          page.pageCount() == 0 ? "0 registros" : (pageIndex + 1) + " / " + page.pageCount());
-      previous.setDisable(pageIndex == 0 || page.pageCount() == 0);
-      next.setDisable(pageIndex + 1 >= page.pageCount());
-    } catch (RuntimeException failure) {
-      table.getItems().clear();
-      pageInfo.setText("Dados indisponíveis");
-      previous.setDisable(true);
-      next.setDisable(true);
-      message.setText("Não foi possível carregar os dados locais. Tente novamente.");
-    }
+    loadPage(null);
   }
+
+  private void loadPage(String completedMessage) {
+    long generation = ++loadGeneration;
+    PageRequest requested = request();
+    setMessage("Carregando dados locais…");
+    pageInfo.setText("Carregando…");
+    previous.setDisable(true);
+    next.setDisable(true);
+    CompletableFuture.supplyAsync(() -> query(requested), queryExecutor)
+        .whenComplete(
+            (loaded, failure) ->
+                Platform.runLater(
+                    () -> {
+                      if (generation != loadGeneration) return;
+                      if (failure != null) {
+                        pageInfo.setText("Dados indisponíveis");
+                        previous.setDisable(true);
+                        next.setDisable(true);
+                        setMessage("Não foi possível carregar os dados locais. Tente novamente.");
+                        return;
+                      }
+                      pageIndex = loaded.pageIndex();
+                      Page<T> page = loaded.page();
+                      table.setItems(FXCollections.observableArrayList(page.items()));
+                      pageInfo.setText(
+                          page.pageCount() == 0
+                              ? "0 registros"
+                              : (pageIndex + 1) + " / " + page.pageCount());
+                      previous.setDisable(pageIndex == 0 || page.pageCount() == 0);
+                      next.setDisable(pageIndex + 1 >= page.pageCount());
+                      setMessage(completedMessage == null ? "" : completedMessage);
+                    }));
+  }
+
+  private LoadedPage<T> query(PageRequest request) {
+    Page<T> page = loader.load(request);
+    if (page.pageCount() == 0) return new LoadedPage<>(page, 0);
+    int resolvedPageIndex = Math.min(request.pageIndex(), page.pageCount() - 1);
+    if (resolvedPageIndex == request.pageIndex()) return new LoadedPage<>(page, resolvedPageIndex);
+    PageRequest correctedRequest =
+        new PageRequest(
+            request.searchText(),
+            request.filter(),
+            request.sortBy(),
+            request.ascending(),
+            resolvedPageIndex,
+            request.pageSize());
+    return new LoadedPage<>(loader.load(correctedRequest), resolvedPageIndex);
+  }
+
+  private String printableRows() {
+    String header =
+        String.join(" | ", table.getColumns().stream().map(TableColumn::getText).toList());
+    String rows =
+        table.getItems().stream()
+            .map(
+                item ->
+                    table.getColumns().stream()
+                        .map(
+                            column -> {
+                              javafx.beans.value.ObservableValue<?> value =
+                                  column.getCellObservableValue(item);
+                              return value == null ? "" : Objects.toString(value.getValue(), "");
+                            })
+                        .collect(java.util.stream.Collectors.joining(" | ")))
+            .collect(java.util.stream.Collectors.joining(System.lineSeparator()));
+    return table.getItems().isEmpty()
+        ? header + System.lineSeparator() + "Nenhum registro."
+        : header + System.lineSeparator() + rows;
+  }
+
+  private void setMessage(String text) {
+    message.setText(text);
+    message.setAccessibleText(text);
+  }
+
+  private record LoadedPage<T>(Page<T> page, int pageIndex) {}
 
   private PageRequest request() {
     return new PageRequest(

@@ -18,7 +18,11 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import javafx.application.Platform;
 import javafx.beans.property.ReadOnlyStringWrapper;
 import javafx.scene.Scene;
 import javafx.scene.control.TableColumn;
@@ -35,6 +39,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.testfx.api.FxRobot;
 import org.testfx.framework.junit5.ApplicationExtension;
 import org.testfx.framework.junit5.Start;
+import org.testfx.util.WaitForAsyncUtils;
 
 @ExtendWith(ApplicationExtension.class)
 class PagedTablePaneTest {
@@ -66,9 +71,30 @@ class PagedTablePaneTest {
           createTable(
               repository,
               loads,
-              creations::incrementAndGet,
-              client -> editedClient.set(client.name()));
+              () -> {
+                creations.incrementAndGet();
+                Client created =
+                    new Client(
+                        UUID.randomUUID(),
+                        "Cliente 00 - Novo",
+                        "92900000003",
+                        Instant.parse("2026-10-31T15:00:00Z"));
+                unitOfWork.execute(
+                    () -> {
+                      repository.save(created);
+                      return null;
+                    });
+                return true;
+              },
+              client -> {
+                editedClient.set(client.name());
+                // The UI callback represents a completed application edit use case. The current
+                // local repository supports client creation only, so the test keeps the UI scope
+                // focused on invoking the callback and reporting its successful commit.
+                return true;
+              });
       robot.interact(() -> stage.setScene(new Scene(table, 900, 600)));
+      waitForPage(robot, "1 / 3");
       Path screenshot = Path.of("target", "visual-regression", "client-table.png");
       Files.createDirectories(screenshot.getParent());
       robot
@@ -85,6 +111,8 @@ class PagedTablePaneTest {
       assertFalse(robot.lookup("#tableEdit").queryButton().isDisabled());
       robot.interact(() -> robot.lookup("#tableEdit").queryButton().fire());
       assertEquals("Cliente 01", editedClient.get());
+      waitForMessage(robot, "Alterações salvas localmente.");
+      assertEquals("Cliente 00", tableItems(robot).getFirst().name());
       robot.interact(
           () ->
               robot
@@ -94,17 +122,25 @@ class PagedTablePaneTest {
                       new KeyEvent(
                           KeyEvent.KEY_PRESSED, "", "", KeyCode.N, false, true, false, false)));
       assertEquals(1, creations.get());
+      waitForPage(robot, "1 / 3");
+      assertEquals(
+          "Registro salvo localmente.", robot.lookup("#tableMessage").queryLabeled().getText());
+      assertTrue(
+          tableItems(robot).stream().anyMatch(client -> client.name().equals("Cliente 00 - Novo")));
 
       robot.interact(() -> robot.lookup("#nextPage").queryButton().fire());
+      waitForPage(robot, "2 / 3");
       assertEquals("2 / 3", robot.lookup("#pageInfo").queryLabeled().getText());
-      assertEquals("Cliente 10", tableItems(robot).getFirst().name());
+      assertEquals("Cliente 09", tableItems(robot).getFirst().name());
 
       robot.interact(() -> robot.lookup("#tableSortDirection").queryButton().fire());
+      waitForPage(robot, "1 / 3");
       assertEquals("1 / 3", robot.lookup("#pageInfo").queryLabeled().getText());
       assertEquals("Cliente 24", tableItems(robot).getFirst().name());
 
       robot.interact(
           () -> robot.lookup("#tableSearch").queryTextInputControl().setText("Cliente 12"));
+      waitForPage(robot, "1 / 1");
       assertEquals(1, tableItems(robot).size());
       assertEquals("Cliente 12", tableItems(robot).getFirst().name());
 
@@ -115,11 +151,13 @@ class PagedTablePaneTest {
                   .queryComboBox()
                   .getSelectionModel()
                   .select("Sem telefone"));
+      waitForPage(robot, "0 registros");
       assertTrue(tableItems(robot).isEmpty());
       assertEquals("0 registros", robot.lookup("#pageInfo").queryLabeled().getText());
 
       robot.interact(
           () -> robot.lookup("#tableFilter").queryComboBox().getSelectionModel().select("Todos"));
+      waitForPage(robot, "1 / 1");
       robot.interact(() -> robot.lookup("#tableSearch").queryAs(TextField.class).requestFocus());
       int beforeRefresh = loads.get();
       robot.interact(
@@ -130,18 +168,45 @@ class PagedTablePaneTest {
                   .fireEvent(
                       new KeyEvent(
                           KeyEvent.KEY_PRESSED, "", "", KeyCode.F5, false, false, false, false)));
+      waitForPage(robot, "1 / 1");
       assertTrue(loads.get() > beforeRefresh);
       assertEquals("Cliente 12", robot.lookup("#tableSearch").queryTextInputControl().getText());
       assertTrue(robot.lookup("#tableMessage").queryLabeled().getText().isBlank());
       robot.interact(() -> robot.lookup("#tableSearch").queryTextInputControl().setText("%"));
+      waitForPage(robot, "0 registros");
       assertTrue(
           tableItems(robot).isEmpty(), "O caractere % deve ser tratado como texto de busca.");
+
+      javafx.scene.control.Button preview = robot.lookup("#tablePrintPreview").queryButton();
+      Platform.runLater(preview::fire);
+      WaitForAsyncUtils.waitFor(
+          5, TimeUnit.SECONDS, () -> robot.lookup("#printPreviewTitle").tryQuery().isPresent());
+      assertEquals(
+          "Resultado da consulta local",
+          robot.lookup("#printPreviewTitle").queryLabeled().getText());
+      assertTrue(robot.lookup("#printIdentity").queryLabeled().getText().contains("ESPAÇO TUCUMÃ"));
+      assertTrue(
+          robot
+              .lookup("#printPreviewContent")
+              .queryTextInputControl()
+              .getText()
+              .contains("Nenhum registro"));
+      Path previewScreenshot = Path.of("target", "visual-regression", "print-preview.png");
+      robot
+          .robotContext()
+          .getCaptureSupport()
+          .saveImage(
+              robot.capture((javafx.scene.Node) robot.lookup(".dialog-pane").query()).getImage(),
+              previewScreenshot);
+      assertTrue(Files.size(previewScreenshot) > 0);
+      robot.interact(() -> robot.lookup("#printPreviewClose").queryButton().fire());
     }
   }
 
   @Test
   @Timeout(30)
-  void hidesDatabaseExceptionDetailsFromTheScreen(FxRobot robot) {
+  void hidesDatabaseExceptionDetailsFromTheScreen(FxRobot robot) throws Exception {
+    AtomicBoolean loaderRanOnFxThread = new AtomicBoolean(true);
     PagedTablePane<Client> table =
         new PagedTablePane<>(
             columns(),
@@ -149,23 +214,65 @@ class PagedTablePaneTest {
             Map.of("NAME", "Nome"),
             10,
             request -> {
+              loaderRanOnFxThread.set(Platform.isFxApplicationThread());
               throw new IllegalStateException("jdbc password=secret");
             },
             null,
             null);
     robot.interact(() -> stage.setScene(new Scene(table, 900, 600)));
+    WaitForAsyncUtils.waitFor(
+        5,
+        TimeUnit.SECONDS,
+        () -> robot.lookup("#tableMessage").queryLabeled().getText().contains("Tente novamente"));
 
     assertEquals(
         "Não foi possível carregar os dados locais. Tente novamente.",
         robot.lookup("#tableMessage").queryLabeled().getText());
     assertFalse(robot.lookup("#tableMessage").queryLabeled().getText().contains("secret"));
+    assertFalse(loaderRanOnFxThread.get(), "Consulta local deve executar fora da thread JavaFX.");
+  }
+
+  @Test
+  @Timeout(30)
+  void longLocalQueryLeavesTheWindowResponsive(FxRobot robot) throws Exception {
+    CountDownLatch queryStarted = new CountDownLatch(1);
+    CountDownLatch allowQueryToFinish = new CountDownLatch(1);
+    PagedTablePane<Client> table =
+        new PagedTablePane<>(
+            columns(),
+            Map.of("ALL", "Todos"),
+            Map.of("NAME", "Nome"),
+            10,
+            request -> {
+              queryStarted.countDown();
+              try {
+                if (!allowQueryToFinish.await(5, TimeUnit.SECONDS)) {
+                  throw new IllegalStateException("Consulta sintética excedeu o tempo limite.");
+                }
+              } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Consulta sintética interrompida.", interrupted);
+              }
+              return new Page<>(java.util.List.of(), 0, request.pageIndex(), request.pageSize());
+            },
+            null,
+            null);
+    robot.interact(() -> stage.setScene(new Scene(table, 900, 600)));
+    WaitForAsyncUtils.waitFor(5, TimeUnit.SECONDS, () -> queryStarted.getCount() == 0);
+    assertEquals(
+        "Carregando dados locais…", robot.lookup("#tableMessage").queryLabeled().getText());
+
+    robot.interact(() -> robot.lookup("#tableSearch").queryTextInputControl().setText("Maria"));
+    assertEquals("Maria", robot.lookup("#tableSearch").queryTextInputControl().getText());
+    allowQueryToFinish.countDown();
+    waitForPage(robot, "0 registros");
   }
 
   private PagedTablePane<Client> createTable(
       SqliteClientRepository repository,
       AtomicInteger loads,
-      Runnable onNew,
-      java.util.function.Consumer<Client> onEdit) {
+      java.util.function.BooleanSupplier onNew,
+      java.util.function.Function<Client, Boolean> onEdit) {
     Map<String, String> filters = new LinkedHashMap<>();
     filters.put("ALL", "Todos");
     filters.put("WITH_PHONE", "Com telefone");
@@ -216,6 +323,21 @@ class PagedTablePaneTest {
                 robot.lookup("#dataTable").<TableView<Client>>query().getItems().stream()
                     .toList()));
     return items.get();
+  }
+
+  private void waitForPage(FxRobot robot, String expected) throws Exception {
+    WaitForAsyncUtils.waitFor(
+        5,
+        TimeUnit.SECONDS,
+        () -> expected.equals(robot.lookup("#pageInfo").queryLabeled().getText()));
+  }
+
+  private void waitForMessage(FxRobot robot, String expected) throws Exception {
+    WaitForAsyncUtils.waitFor(
+        5,
+        TimeUnit.SECONDS,
+        () -> !robot.lookup("#tableMessage").queryLabeled().getText().startsWith("Carregando"));
+    assertEquals(expected, robot.lookup("#tableMessage").queryLabeled().getText());
   }
 
   private void seedClients(SqliteUnitOfWork unitOfWork, SqliteClientRepository repository) {
