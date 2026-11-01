@@ -36,4 +36,12 @@ public record DesktopEnvironment(EnvironmentProfile profile, Path dataDirectory)
   public Path databaseFile() {
     return dataDirectory.resolve("tucuma.sqlite");
   }
+
+  public Path preferencesFile() {
+    return dataDirectory.resolve("preferences.properties");
+  }
+
+  public Path logsDirectory() {
+    return dataDirectory.resolve("logs");
+  }
 }
