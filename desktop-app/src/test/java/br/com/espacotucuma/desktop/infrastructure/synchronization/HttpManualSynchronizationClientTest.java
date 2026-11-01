@@ -165,7 +165,7 @@ class HttpManualSynchronizationClientTest {
     String validated =
         "{\"contractVersion\":1,\"backupId\":\""
             + backupId
-            + "\",\"checkpoint\":0,\"status\":\"VALIDATED\","
+            + "\",\"checkpoint\":0,\"status\":\"VALIDADO\","
             + "\"createdAt\":\"2026-11-01T12:00:00Z\"}";
     SimulatedHttpClient http =
         new SimulatedHttpClient(

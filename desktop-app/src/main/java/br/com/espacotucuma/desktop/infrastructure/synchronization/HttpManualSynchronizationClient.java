@@ -505,7 +505,7 @@ public final class HttpManualSynchronizationClient
       if (backup.contractVersion() != SyncContract.VERSION
           || backup.backupId() == null
           || backup.checkpoint() != checkpoint
-          || !"VALIDATED".equals(backup.status())
+          || !"VALIDADO".equals(backup.status())
           || backup.createdAt() == null) {
         return new BackupAttempt(null, "A resposta do backup não confirmou o checkpoint enviado.");
       }

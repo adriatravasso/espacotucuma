@@ -207,6 +207,10 @@ class AppointmentRegistryPaneTest {
           8,
           TimeUnit.SECONDS,
           () -> robot.lookup("#attendanceServices").queryTableView().getItems().size() == 1);
+      WaitForAsyncUtils.waitFor(
+          8,
+          TimeUnit.SECONDS,
+          () -> robot.lookup("#attendanceSubtotal").queryLabeled().getText().contains("50,00"));
       assertTrue(robot.lookup("#attendanceSubtotal").queryLabeled().getText().contains("50,00"));
       assertTrue(robot.lookup("#attendanceCommission").queryLabeled().getText().contains("0.00"));
       robot.interact(
