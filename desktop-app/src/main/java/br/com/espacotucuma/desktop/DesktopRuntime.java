@@ -1,5 +1,6 @@
 package br.com.espacotucuma.desktop;
 
+import br.com.espacotucuma.desktop.application.attendance.MaintainAttendanceUseCase;
 import br.com.espacotucuma.desktop.application.client.MaintainClientUseCase;
 import br.com.espacotucuma.desktop.application.client.RegisterClientUseCase;
 import br.com.espacotucuma.desktop.application.commission.CommissionService;
@@ -14,6 +15,7 @@ import br.com.espacotucuma.desktop.application.identity.DeactivateUserUseCase;
 import br.com.espacotucuma.desktop.application.identity.LoginUseCase;
 import br.com.espacotucuma.desktop.application.identity.LogoutUseCase;
 import br.com.espacotucuma.desktop.application.identity.SessionContext;
+import br.com.espacotucuma.desktop.application.port.attendance.AttendanceRepository;
 import br.com.espacotucuma.desktop.application.port.client.ClientRepository;
 import br.com.espacotucuma.desktop.application.port.commission.CommissionRuleRepository;
 import br.com.espacotucuma.desktop.application.port.prepaid.PrepaidPackageRepository;
@@ -27,6 +29,7 @@ import br.com.espacotucuma.desktop.application.service.MaintainServiceUseCase;
 import br.com.espacotucuma.desktop.infrastructure.security.Pbkdf2PasswordHasher;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.LocalDatabaseSession;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteAppointmentRepository;
+import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteAttendanceRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteAuditRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteClientRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteCommissionRuleRepository;
@@ -66,6 +69,7 @@ public final class DesktopRuntime implements AutoCloseable {
   private final MaintainPrepaidPackagesUseCase maintainPrepaidPackages;
   private final AppointmentRepository appointments;
   private final MaintainAppointmentUseCase maintainAppointment;
+  private final MaintainAttendanceUseCase maintainAttendance;
   private final AuthorizationService authorization;
   private final CreateFirstAdministratorUseCase createFirstAdministrator;
   private final ChangeLocalPasswordUseCase changeLocalPassword;
@@ -94,6 +98,7 @@ public final class DesktopRuntime implements AutoCloseable {
       MaintainPrepaidPackagesUseCase maintainPrepaidPackages,
       AppointmentRepository appointments,
       MaintainAppointmentUseCase maintainAppointment,
+      MaintainAttendanceUseCase maintainAttendance,
       AuthorizationService authorization,
       CreateFirstAdministratorUseCase createFirstAdministrator,
       ChangeLocalPasswordUseCase changeLocalPassword,
@@ -120,6 +125,7 @@ public final class DesktopRuntime implements AutoCloseable {
     this.maintainPrepaidPackages = maintainPrepaidPackages;
     this.appointments = appointments;
     this.maintainAppointment = maintainAppointment;
+    this.maintainAttendance = maintainAttendance;
     this.authorization = authorization;
     this.createFirstAdministrator = createFirstAdministrator;
     this.changeLocalPassword = changeLocalPassword;
@@ -231,6 +237,19 @@ public final class DesktopRuntime implements AutoCloseable {
               authorization,
               audit,
               stationId);
+      AttendanceRepository attendances =
+          new SqliteAttendanceRepository(database.connection(), unitOfWork);
+      MaintainAttendanceUseCase maintainAttendance =
+          new MaintainAttendanceUseCase(
+              unitOfWork,
+              attendances,
+              appointments,
+              services,
+              commissionRules,
+              new SqliteOutboxRepository(database.connection(), unitOfWork),
+              authorization,
+              audit,
+              stationId);
       CreateFirstAdministratorUseCase createFirstAdministrator =
           new CreateFirstAdministratorUseCase(
               unitOfWork,
@@ -274,6 +293,7 @@ public final class DesktopRuntime implements AutoCloseable {
           maintainPrepaidPackages,
           appointments,
           maintainAppointment,
+          maintainAttendance,
           authorization,
           createFirstAdministrator,
           changeLocalPassword,
@@ -351,6 +371,10 @@ public final class DesktopRuntime implements AutoCloseable {
 
   public MaintainAppointmentUseCase maintainAppointment() {
     return maintainAppointment;
+  }
+
+  public MaintainAttendanceUseCase maintainAttendance() {
+    return maintainAttendance;
   }
 
   public AuthorizationService authorization() {

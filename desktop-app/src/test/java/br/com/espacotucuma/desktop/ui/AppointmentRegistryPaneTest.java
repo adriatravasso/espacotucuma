@@ -3,6 +3,7 @@ package br.com.espacotucuma.desktop.ui;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import br.com.espacotucuma.desktop.application.attendance.MaintainAttendanceUseCase;
 import br.com.espacotucuma.desktop.application.identity.AuthenticatedUser;
 import br.com.espacotucuma.desktop.application.identity.AuthorizationService;
 import br.com.espacotucuma.desktop.application.identity.CreateFirstAdministratorUseCase;
@@ -10,16 +11,20 @@ import br.com.espacotucuma.desktop.application.identity.InitialAdministratorSetu
 import br.com.espacotucuma.desktop.application.identity.SessionContext;
 import br.com.espacotucuma.desktop.application.identity.UserRole;
 import br.com.espacotucuma.desktop.application.port.client.ClientRepository;
+import br.com.espacotucuma.desktop.application.port.prepaid.PrepaidPackageRepository;
 import br.com.espacotucuma.desktop.application.port.professional.ProfessionalRepository;
 import br.com.espacotucuma.desktop.application.port.service.ServiceRepository;
 import br.com.espacotucuma.desktop.application.scheduling.MaintainAppointmentUseCase;
 import br.com.espacotucuma.desktop.infrastructure.security.Pbkdf2PasswordHasher;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.LocalDatabaseSession;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteAppointmentRepository;
+import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteAttendanceRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteAuditRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteClientRepository;
+import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteCommissionRuleRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteInitialSetupRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteOutboxRepository;
+import br.com.espacotucuma.desktop.infrastructure.sqlite.SqlitePrepaidPackageRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteProfessionalRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteServiceRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteUnitOfWork;
@@ -80,7 +85,9 @@ class AppointmentRegistryPaneTest {
               fixture.clients,
               fixture.professionals,
               fixture.services,
-              fixture.authorization);
+              fixture.authorization,
+              fixture.attendance,
+              fixture.prepaidPackages);
       robot.interact(() -> stage.setScene(new Scene(pane, 1180, 720)));
       robot.interact(() -> pane.datePicker().setValue(MONDAY));
 
@@ -119,35 +126,6 @@ class AppointmentRegistryPaneTest {
       assertTrue(
           robot.lookup("#appointmentAvailability").queryLabeled().getText().contains("08:00"));
 
-      robot.interact(
-          () ->
-              robot.lookup("#appointmentTable").queryTableView().getSelectionModel().selectFirst());
-      Platform.runLater(() -> robot.lookup("#appointmentConfirm").queryButton().fire());
-      WaitForAsyncUtils.waitFor(
-          8,
-          TimeUnit.SECONDS,
-          () ->
-              fixture
-                  .maintain
-                  .findById(created.appointment().id())
-                  .status()
-                  .name()
-                  .equals("CONFIRMADO"));
-      robot.interact(
-          () ->
-              robot.lookup("#appointmentTable").queryTableView().getSelectionModel().selectFirst());
-      Platform.runLater(() -> robot.lookup("#appointmentStart").queryButton().fire());
-      WaitForAsyncUtils.waitFor(
-          8,
-          TimeUnit.SECONDS,
-          () ->
-              fixture
-                  .maintain
-                  .findById(created.appointment().id())
-                  .status()
-                  .name()
-                  .equals("EM_ATENDIMENTO"));
-
       Platform.runLater(() -> robot.lookup("#appointmentNew").queryButton().fire());
       waitForNode(robot, "#appointmentFormTime");
       robot.interact(
@@ -178,6 +156,95 @@ class AppointmentRegistryPaneTest {
               "SELECT COUNT(*) FROM agendamento WHERE profissional_id='"
                   + fixture.professionalId
                   + "' AND estado IN ('AGENDADO','CONFIRMADO','EM_ATENDIMENTO')"));
+
+      robot.interact(
+          () ->
+              robot.lookup("#appointmentTable").queryTableView().getSelectionModel().selectFirst());
+      Platform.runLater(() -> robot.lookup("#appointmentConfirm").queryButton().fire());
+      WaitForAsyncUtils.waitFor(
+          8,
+          TimeUnit.SECONDS,
+          () ->
+              fixture
+                  .maintain
+                  .findById(created.appointment().id())
+                  .status()
+                  .name()
+                  .equals("CONFIRMADO"));
+      robot.interact(
+          () ->
+              robot.lookup("#appointmentTable").queryTableView().getSelectionModel().selectFirst());
+      Platform.runLater(() -> robot.lookup("#appointmentStart").queryButton().fire());
+      waitForNode(robot, "#attendanceServiceChoice");
+      Platform.runLater(() -> robot.lookup("#attendanceComplete").queryButton().fire());
+      WaitForAsyncUtils.waitFor(
+          8,
+          TimeUnit.SECONDS,
+          () ->
+              robot
+                  .lookup("#attendanceMessage")
+                  .queryLabeled()
+                  .getText()
+                  .contains("Adicione ao menos"));
+      robot.interact(
+          () -> {
+            robot
+                .lookup("#attendanceServiceChoice")
+                .queryComboBox()
+                .getSelectionModel()
+                .selectFirst();
+          });
+      Platform.runLater(() -> robot.lookup("#attendanceAddService").queryButton().fire());
+      WaitForAsyncUtils.waitFor(
+          8,
+          TimeUnit.SECONDS,
+          () -> robot.lookup("#attendanceServices").queryTableView().getItems().size() == 1);
+      assertTrue(robot.lookup("#attendanceSubtotal").queryLabeled().getText().contains("50,00"));
+      assertTrue(robot.lookup("#attendanceCommission").queryLabeled().getText().contains("0.00"));
+      robot.interact(
+          () -> {
+            robot.lookup("#attendanceDiscount").queryTextInputControl().setText("5,00");
+            robot
+                .lookup("#attendanceDiscountReason")
+                .queryTextInputControl()
+                .setText("Ajuste aprovado");
+          });
+      robot.interact(
+          () ->
+              fixture.execute(
+                  "UPDATE servico SET preco_centavos=6500 WHERE id='" + fixture.serviceId + "'"));
+      Platform.runLater(() -> robot.lookup("#attendanceApplyDiscount").queryButton().fire());
+      WaitForAsyncUtils.waitFor(
+          8,
+          TimeUnit.SECONDS,
+          () ->
+              robot
+                  .lookup("#attendanceMessage")
+                  .queryLabeled()
+                  .getText()
+                  .contains("Desconto autorizado"));
+      assertTrue(robot.lookup("#attendanceTotal").queryLabeled().getText().contains("45,00"));
+      robot.interact(
+          () ->
+              robot
+                  .lookup("#attendanceNotes")
+                  .queryTextInputControl()
+                  .setText("Atendimento de teste"));
+      Platform.runLater(() -> robot.lookup("#attendanceSaveNotes").queryButton().fire());
+      Platform.runLater(() -> robot.lookup("#attendanceComplete").queryButton().fire());
+      WaitForAsyncUtils.waitFor(
+          8,
+          TimeUnit.SECONDS,
+          () ->
+              fixture
+                  .maintain
+                  .findById(created.appointment().id())
+                  .status()
+                  .name()
+                  .equals("CONCLUIDO"));
+      assertEquals(5000, fixture.scalar("SELECT preco_unitario_centavos FROM atendimento_servico"));
+      assertEquals(4500, fixture.scalar("SELECT total_centavos FROM atendimento"));
+      assertEquals(0, fixture.scalar("SELECT COUNT(*) FROM recebimento"));
 
       robot.interact(
           () ->
@@ -226,6 +293,8 @@ class AppointmentRegistryPaneTest {
     final ClientRepository clients;
     final ProfessionalRepository professionals;
     final ServiceRepository services;
+    final MaintainAttendanceUseCase attendance;
+    final PrepaidPackageRepository prepaidPackages;
     final AuthorizationService authorization;
     final MaintainAppointmentUseCase maintain;
     final UUID clientId = UUID.randomUUID();
@@ -263,11 +332,13 @@ class AppointmentRegistryPaneTest {
                 UserRole.ADMINISTRADOR));
         authorization = new AuthorizationService(sessions);
       }
-      var outbox = new SqliteOutboxRepository(database.connection(), unit);
       clients = new SqliteClientRepository(database.connection(), unit);
       professionals = new SqliteProfessionalRepository(database.connection(), unit);
       services = new SqliteServiceRepository(database.connection(), unit);
       var appointmentRepository = new SqliteAppointmentRepository(database.connection(), unit);
+      var outbox = new SqliteOutboxRepository(database.connection(), unit);
+      var commissionRules = new SqliteCommissionRuleRepository(database.connection(), unit);
+      prepaidPackages = new SqlitePrepaidPackageRepository(database.connection(), unit);
       seed();
       maintain =
           new MaintainAppointmentUseCase(
@@ -276,6 +347,18 @@ class AppointmentRegistryPaneTest {
               clients,
               professionals,
               services,
+              outbox,
+              authorization,
+              audit,
+              STATION,
+              Clock.fixed(NOW, ZoneId.of("America/Manaus")));
+      attendance =
+          new MaintainAttendanceUseCase(
+              unit,
+              new SqliteAttendanceRepository(database.connection(), unit),
+              appointmentRepository,
+              services,
+              commissionRules,
               outbox,
               authorization,
               audit,
@@ -340,6 +423,14 @@ class AppointmentRegistryPaneTest {
       try (Statement statement = database.connection().createStatement();
           ResultSet row = statement.executeQuery(sql)) {
         return row.next() ? row.getInt(1) : -1;
+      }
+    }
+
+    void execute(String sql) {
+      try (Statement statement = database.connection().createStatement()) {
+        statement.execute(sql);
+      } catch (java.sql.SQLException failure) {
+        throw new IllegalStateException(failure);
       }
     }
 
