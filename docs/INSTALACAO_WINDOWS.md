@@ -1,6 +1,6 @@
 # Instalação Windows
 
-O instalador MSI é criado por `scripts/package-windows.ps1` com JDK 21, Maven e WiX Toolset 3.x. O comando recebe uma versão sem sufixo, por exemplo:
+O instalador MSI é criado por `scripts/package-windows.ps1` com JDK 21, Maven e WiX Toolset 3.x. O comando compila e monta os JARs de produção; a suíte Maven completa é executada separadamente no CI, e o smoke do MSI testa o artefato instalado no Windows. O comando recebe uma versão sem sufixo, por exemplo:
 
 ```powershell
 .\scripts\package-windows.ps1 -AppVersion 1.0.0
