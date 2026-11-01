@@ -386,7 +386,14 @@ public final class CommercialReportsPane extends BorderPane {
                 extension.toUpperCase() + " (*." + extension + ")", "*." + extension));
     java.io.File selectedFile = chooser.showSaveDialog(getScene().getWindow());
     if (selectedFile == null) return;
-    Path destination = selectedFile.toPath();
+    exportReportTo(pdf, period, selectedFile.toPath());
+  }
+
+  void exportReportTo(boolean pdf, CommercialReportPeriod period, Path destination) {
+    if (getScene() == null || !authorization.isAllowed(Permission.REPORTS_VIEW)) return;
+    CommercialReportType selectedType = reportType.getValue();
+    String selectedProfessional = professionalFilter.getText().strip();
+    String selectedService = serviceFilter.getText().strip();
     String user = authorization.requireUser(Permission.REPORTS_VIEW).name();
     String generatedAt =
         DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss")
