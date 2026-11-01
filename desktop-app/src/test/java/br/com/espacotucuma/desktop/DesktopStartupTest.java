@@ -2,6 +2,7 @@ package br.com.espacotucuma.desktop;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -93,6 +94,36 @@ class DesktopStartupTest {
     assertThrows(SQLException.class, () -> LocalDatabaseSession.open(databaseFile));
 
     assertArrayEquals(originalContents, Files.readAllBytes(databaseFile));
+  }
+
+  @Test
+  void startupFailureDoesNotWritePersonalPathsOrExceptionDetailsToLogs(@TempDir Path temp)
+      throws Exception {
+    Path privateRoot = temp.resolve("PII_CANARY_Cliente_JoaoDaSilva");
+    DesktopEnvironment environment = environment(privateRoot);
+    Files.createDirectories(environment.dataDirectory());
+    Files.createDirectory(environment.databaseFile());
+
+    assertThrows(Exception.class, () -> DesktopRuntime.open(environment));
+
+    try (var logFiles = Files.list(environment.logsDirectory())) {
+      String logs =
+          logFiles
+              .filter(Files::isRegularFile)
+              .map(
+                  path -> {
+                    try {
+                      return Files.readString(path);
+                    } catch (IOException failure) {
+                      throw new IllegalStateException(failure);
+                    }
+                  })
+              .collect(java.util.stream.Collectors.joining("\n"));
+      assertFalse(logs.contains("PII_CANARY"));
+      assertFalse(logs.contains(privateRoot.toString()));
+      assertFalse(logs.contains("Caused by:"));
+      assertTrue(logs.contains("Falha ao preparar a aplicação desktop"));
+    }
   }
 
   private DesktopEnvironment environment(Path root) {
