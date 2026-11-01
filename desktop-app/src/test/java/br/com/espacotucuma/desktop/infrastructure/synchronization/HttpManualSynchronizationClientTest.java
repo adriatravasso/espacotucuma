@@ -1,6 +1,7 @@
 package br.com.espacotucuma.desktop.infrastructure.synchronization;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -410,6 +411,56 @@ class HttpManualSynchronizationClientTest {
     assertEquals(100, changes.applied.getFirst().changes().size());
     assertEquals(1, changes.applied.get(1).changes().size());
     assertTrue(resumed.paths.contains("/sync/changes"));
+  }
+
+  @Test
+  void backupHistoryQueryAuthenticatesAndDoesNotRequestDownload() {
+    UUID backupId = UUID.fromString("00000000-0000-0000-0000-000000000047");
+    SimulatedHttpClient http =
+        new SimulatedHttpClient(
+            response("{\"accessToken\":\"token\"}"),
+            response(
+                "{\"contractVersion\":1,\"backups\":[{\"contractVersion\":1,"
+                    + "\"backupId\":\""
+                    + backupId
+                    + "\",\"checkpoint\":17,\"status\":\"VALIDADO\","
+                    + "\"createdAt\":\"2026-11-01T12:00:00Z\"}]}"));
+
+    var backups = client(new MemoryOutbox(List.of()), http).listAvailableBackups();
+
+    assertEquals(1, backups.size());
+    assertEquals(backupId, backups.getFirst().backupId());
+    assertEquals(17, backups.getFirst().checkpoint());
+    assertEquals(List.of("/sync/devices/token", "/sync/backups"), http.paths);
+    assertTrue(http.paths.stream().noneMatch(path -> path.contains("restore-download")));
+  }
+
+  @Test
+  void backupHistoryIsHiddenAndRejectedForUnauthorizedLocalRole() {
+    SessionContext sessions = new SessionContext();
+    sessions.establish(
+        new AuthenticatedUser(UUID.randomUUID(), "Recepção", "recepcao", UserRole.RECEPCAO));
+    AuthorizationService authorization = new AuthorizationService(sessions);
+    SimulatedHttpClient http = new SimulatedHttpClient();
+    HttpManualSynchronizationClient client =
+        new HttpManualSynchronizationClient(
+            URI.create("http://localhost"),
+            DEVICE_ID,
+            emptyCredentials(),
+            new MemoryOutbox(List.of()),
+            new MemoryRemoteChanges(),
+            directUnitOfWork(),
+            http,
+            JSON,
+            Duration.ofMillis(100),
+            authorization,
+            null,
+            null,
+            DEVICE_ID);
+
+    assertFalse(client.canListBackups());
+    assertThrows(AuthorizationException.class, client::listAvailableBackups);
+    assertTrue(http.paths.isEmpty());
   }
 
   private static HttpManualSynchronizationClient client(
