@@ -1,7 +1,7 @@
 FROM alpine:3.22.1
 
 ARG TARGETARCH
-RUN apk add --no-cache ca-certificates curl tar \
+RUN apk add --no-cache ca-certificates curl jq tar \
     && case "$TARGETARCH" in \
          amd64) asset_arch=amd64; expected_sha256=4a8128911ccad4e7b481f26635a4cfd1ec064412210526e57ad2c748d356f3b7 ;; \
          arm64) asset_arch=arm64; expected_sha256=6e9dea7ac4f81562add9e1e31206ba6059d6f5929ad4ed924986223282b3aa9c ;; \

@@ -13,7 +13,7 @@ docker compose --env-file .env.demo up --detach --build
 curl http://127.0.0.1:18081/actuator/health/readiness
 ```
 
-O primeiro comando gera segredos aleatórios locais em `.env.demo`; o arquivo está ignorado pelo Git. Preserve-o enquanto os volumes demo existirem, pois contém as credenciais de administração do storage. A API fica acessível apenas em `127.0.0.1:18081`. PostgreSQL e RustFS não têm portas publicadas; os containers comunicam-se por uma rede Docker marcada como `internal`. O serviço de bootstrap cria o bucket privado e associa à aplicação uma identidade de storage limitada a esse bucket. O serviço envia os snapshots com SSE-S3 (`AES256`). A imagem [RustFS](https://docs.rustfs.com/en/installation/container/docker/) e a CLI [rc](https://github.com/rustfs/cli) são versões fixadas no Compose/Dockerfile.
+O primeiro comando gera segredos aleatórios locais em `.env.demo`; o arquivo está ignorado pelo Git. Preserve-o enquanto os volumes demo existirem, pois contém as credenciais de administração do storage e a chave mestra SSE-S3 de 32 bytes. Se `.env.demo` já existir sem essa chave, o script acrescenta uma chave sem alterar as credenciais existentes. A API fica acessível apenas em `127.0.0.1:18081`. PostgreSQL e RustFS não têm portas publicadas; o PostgreSQL permanece na rede Docker `internal`, enquanto a API usa uma rede separada para expor somente a porta local. O serviço de bootstrap cria o bucket privado e associa à aplicação uma identidade de storage limitada a esse bucket. O serviço envia os snapshots com SSE-S3 (`AES256`). A imagem [RustFS](https://docs.rustfs.com/en/installation/container/docker/) e a CLI [rc](https://github.com/rustfs/cli) são versões fixadas no Compose/Dockerfile.
 
 Para parar sem remover os dados sintéticos:
 

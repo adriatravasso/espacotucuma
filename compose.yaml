@@ -22,6 +22,7 @@ services:
     environment:
       RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:?Gere os segredos locais com scripts/configure-demo-environment.sh}
       RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?Gere os segredos locais com scripts/configure-demo-environment.sh}
+      RUSTFS_SSE_S3_MASTER_KEY: ${RUSTFS_SSE_S3_MASTER_KEY:?Gere os segredos locais com scripts/configure-demo-environment.sh}
       RUSTFS_ADDRESS: ":9000"
       RUSTFS_CONSOLE_ADDRESS: ":9001"
       RUSTFS_CONSOLE_ENABLE: "false"
@@ -56,6 +57,7 @@ services:
         done
         test "$${ready}" = true
         if ! rc ls local/tucuma-demo-backups >/dev/null 2>&1; then rc mb local/tucuma-demo-backups; fi
+        if ! rc ls local/tucuma-other-demo >/dev/null 2>&1; then rc mb local/tucuma-other-demo; fi
         if ! rc admin policy info local tucuma-demo-backup >/dev/null 2>&1; then
           rc admin policy create local tucuma-demo-backup /policies/backup.json
         fi
@@ -99,6 +101,7 @@ services:
       - "127.0.0.1:${DEMO_SERVER_PORT:-18081}:8080"
     networks:
       - demo-backend
+      - demo-edge
     healthcheck:
       test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:8080/actuator/health/readiness"]
       interval: 10s
@@ -117,7 +120,7 @@ services:
     command:
       - |
         status=$$(curl --silent --output /dev/null --write-out "%{http_code}" "http://rustfs:9000/tucuma-demo-backups/$${DEMO_OBJECT_KEY}")
-        test "$${status}" = 403
+        if [ "$${status}" != 403 ]; then echo "Objeto sem autenticação respondeu HTTP $${status}; esperado HTTP 403." >&2; exit 1; fi
     environment:
       DEMO_OBJECT_KEY: ${DEMO_OBJECT_KEY:-}
     networks:
@@ -144,6 +147,7 @@ services:
 networks:
   demo-backend:
     internal: true
+  demo-edge:
 
 volumes:
   demo-postgres-data:
