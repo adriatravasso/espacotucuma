@@ -45,8 +45,11 @@ class SQLiteMigrationTest {
       assertTrue(tableExists(connection, "tentativa_login"));
       assertTrue(tableExists(connection, "operacao_pendente"));
       assertTrue(tableExists(connection, "status_protecao"));
+      assertTrue(tableExists(connection, "indisponibilidade_profissional"));
+      assertTrue(triggerExists(connection, "trg_agendamento_profissional_ativo_insert"));
+      assertTrue(triggerExists(connection, "trg_agendamento_profissional_ativo_update"));
       assertEquals(
-          7, scalarInt(connection, "SELECT count(*) FROM flyway_schema_history WHERE success = 1"));
+          8, scalarInt(connection, "SELECT count(*) FROM flyway_schema_history WHERE success = 1"));
     }
   }
 
@@ -66,7 +69,7 @@ class SQLiteMigrationTest {
               database.connection(),
               "SELECT count(*) FROM cliente WHERE id = '" + CLIENT_ID + "'"));
       assertEquals(
-          7,
+          8,
           scalarInt(
               database.connection(),
               "SELECT count(*) FROM flyway_schema_history WHERE success = 1"));

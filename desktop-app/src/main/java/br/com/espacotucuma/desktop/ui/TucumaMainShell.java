@@ -33,6 +33,7 @@ final class TucumaMainShell {
   private final StatusBar statusBar = new StatusBar();
   private final Supplier<ProtectionStatus> statusLoader;
   private final Parent clientsView;
+  private final Parent professionalsView;
   private final Timeline statusRefresh;
   private Runnable logoutAction = () -> {};
   private String activeModule = "Início";
@@ -42,16 +43,23 @@ final class TucumaMainShell {
         () ->
             new ProtectionStatus(
                 userName, Path.of("dados/tucuma.sqlite"), 0, 0, null, 0, null, null),
+        null,
         null);
   }
 
   TucumaMainShell(Supplier<ProtectionStatus> statusLoader) {
-    this(statusLoader, null);
+    this(statusLoader, null, null);
   }
 
   TucumaMainShell(Supplier<ProtectionStatus> statusLoader, Parent clientsView) {
+    this(statusLoader, clientsView, null);
+  }
+
+  TucumaMainShell(
+      Supplier<ProtectionStatus> statusLoader, Parent clientsView, Parent professionalsView) {
     this.statusLoader = statusLoader;
     this.clientsView = clientsView;
+    this.professionalsView = professionalsView;
     root.setTop(new VBox(createMenuBar(), createToolBar()));
     root.setLeft(createNavigation());
     root.setCenter(workArea);
@@ -91,6 +99,10 @@ final class TucumaMainShell {
   void refreshActiveModuleAccess() {
     if (activeModule.equals("Clientes") && clientsView instanceof ClientRegistryPane clientPane) {
       clientPane.refreshAccess();
+    }
+    if (activeModule.equals("Profissionais")
+        && professionalsView instanceof ProfessionalRegistryPane professionalPane) {
+      professionalPane.refreshAccess();
     }
   }
 
@@ -197,6 +209,10 @@ final class TucumaMainShell {
     if (module.equals("Clientes") && clientsView instanceof ClientRegistryPane clientPane) {
       clientPane.refreshAccess();
       workArea.setCenter(clientPane);
+    } else if (module.equals("Profissionais")
+        && professionalsView instanceof ProfessionalRegistryPane professionalPane) {
+      professionalPane.refreshAccess();
+      workArea.setCenter(professionalPane);
     } else {
       workArea.setCenter(placeholder);
     }
