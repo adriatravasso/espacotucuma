@@ -3,6 +3,7 @@ package br.com.espacotucuma.desktop.ui;
 import br.com.espacotucuma.desktop.DesktopRuntime;
 import javafx.application.Application;
 import javafx.application.Platform;
+import javafx.scene.Parent;
 import javafx.scene.Scene;
 import javafx.scene.control.Alert;
 import javafx.stage.Stage;
@@ -44,6 +45,12 @@ public final class TucumaDesktopApplication extends Application {
       return;
     }
 
+    Parent packagesView =
+        new PackageRegistryPane(
+            runtime.prepaidPackages(),
+            runtime.clients(),
+            runtime.maintainPrepaidPackages(),
+            runtime.authorization());
     shell =
         new TucumaMainShell(
             runtime::protectionStatus,
@@ -61,7 +68,8 @@ public final class TucumaDesktopApplication extends Application {
                 runtime.commissions(),
                 runtime.maintainCommissionRule(),
                 runtime.commissionRules(),
-                runtime.professionals()));
+                runtime.professionals()),
+            packagesView);
     shell.setLogoutAction(
         () -> {
           runtime.logout().logout();

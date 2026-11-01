@@ -35,6 +35,7 @@ final class TucumaMainShell {
   private final Parent clientsView;
   private final Parent professionalsView;
   private final Parent servicesView;
+  private final Parent packagesView;
   private final Timeline statusRefresh;
   private Runnable logoutAction = () -> {};
   private String activeModule = "Início";
@@ -67,10 +68,20 @@ final class TucumaMainShell {
       Parent clientsView,
       Parent professionalsView,
       Parent servicesView) {
+    this(statusLoader, clientsView, professionalsView, servicesView, null);
+  }
+
+  TucumaMainShell(
+      Supplier<ProtectionStatus> statusLoader,
+      Parent clientsView,
+      Parent professionalsView,
+      Parent servicesView,
+      Parent packagesView) {
     this.statusLoader = statusLoader;
     this.clientsView = clientsView;
     this.professionalsView = professionalsView;
     this.servicesView = servicesView;
+    this.packagesView = packagesView;
     root.setTop(new VBox(createMenuBar(), createToolBar()));
     root.setLeft(createNavigation());
     root.setCenter(workArea);
@@ -117,6 +128,9 @@ final class TucumaMainShell {
     }
     if (activeModule.equals("Serviços") && servicesView instanceof ServiceCatalogPane servicePane) {
       servicePane.refreshAccess();
+    }
+    if (activeModule.equals("Pacotes") && packagesView instanceof PackageRegistryPane packagePane) {
+      packagePane.refreshAccess();
     }
   }
 
@@ -231,6 +245,11 @@ final class TucumaMainShell {
         && servicesView instanceof ServiceCatalogPane servicePane) {
       servicePane.refreshAccess();
       workArea.setCenter(servicePane);
+    } else if (module.equals("Pacotes")
+        && packagesView instanceof PackageRegistryPane packagePane) {
+      packagePane.refreshAccess();
+      packagePane.refresh();
+      workArea.setCenter(packagePane);
     } else {
       workArea.setCenter(placeholder);
     }
