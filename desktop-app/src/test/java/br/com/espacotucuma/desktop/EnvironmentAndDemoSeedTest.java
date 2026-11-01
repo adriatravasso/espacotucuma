@@ -23,15 +23,17 @@ class EnvironmentAndDemoSeedTest {
 
   @Test
   void environmentProfilesUseIsolatedDataPathsOutsideTheCheckout() {
-    Path home = Path.of("C:/fake/user");
-    Path temp = Path.of("C:/fake/temp");
+    Path sandbox = Path.of(System.getProperty("java.io.tmpdir"), "tucuma-test-paths");
+    Path home = sandbox.resolve("home");
+    Path temp = sandbox.resolve("temp");
+    Path checkout = Path.of("").toAbsolutePath();
     Map<EnvironmentProfile, Path> paths = new EnumMap<>(EnvironmentProfile.class);
 
     for (EnvironmentProfile profile : EnvironmentProfile.values()) {
       DesktopEnvironment environment = DesktopEnvironment.forProfile(profile, null, home, temp);
       paths.put(profile, environment.databaseFile());
       assertTrue(environment.databaseFile().isAbsolute());
-      assertTrue(!environment.databaseFile().startsWith(Path.of("C:/project")));
+      assertTrue(!environment.databaseFile().startsWith(checkout));
     }
 
     assertEquals(paths.size(), paths.values().stream().distinct().count());

@@ -24,8 +24,11 @@ jobs:
           java-version: '21'
           cache: maven
 
+      - name: Install virtual display
+        run: sudo apt-get update && sudo apt-get install --yes xvfb
+
       - name: Compile all modules and run tests
-        run: ./mvnw --batch-mode --no-transfer-progress clean verify
+        run: xvfb-run --auto-servernum ./mvnw --batch-mode --no-transfer-progress clean verify
 
   secret-scan:
     name: Scan repository history for secrets
