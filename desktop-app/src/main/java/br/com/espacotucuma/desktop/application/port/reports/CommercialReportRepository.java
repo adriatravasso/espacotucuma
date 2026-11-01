@@ -9,5 +9,13 @@ public interface CommercialReportRepository {
   CommercialReportPage find(
       CommercialReportType type, CommercialReportPeriod period, int page, int pageSize);
 
+  CommercialReportPage find(
+      CommercialReportType type,
+      CommercialReportPeriod period,
+      int page,
+      int pageSize,
+      String professionalFilter,
+      String serviceFilter);
+
   CommercialReportSummary summarize(CommercialReportPeriod period);
 }

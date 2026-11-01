@@ -1,6 +1,8 @@
 package br.com.espacotucuma.desktop.infrastructure.sqlite;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import br.com.espacotucuma.desktop.application.reports.CommercialReportPeriod;
 import br.com.espacotucuma.desktop.application.reports.CommercialReportType;
@@ -19,6 +21,8 @@ class CommercialReportsSQLiteTest {
   private static final String PROFESSIONAL = "30000000-0000-4000-8000-000000000001";
   private static final String SERVICE = "40000000-0000-4000-8000-000000000001";
   private static final String CASH_TURN = "50000000-0000-4000-8000-000000000001";
+  private static final String PRODUCT = "c0000000-0000-4000-8000-000000000001";
+  private static final String LOW_PRODUCT = "c0000000-0000-4000-8000-000000000002";
 
   @Test
   void reportsUseManausBoundariesAggregateTransactionsAndRemainPaginated(@TempDir Path temp)
@@ -47,6 +51,23 @@ class CommercialReportsSQLiteTest {
       assertEquals(2, byProfessional.rows().getFirst().quantity());
       assertEquals(25_000, byProfessional.rows().getFirst().amountCents());
       assertEquals(
+          1,
+          reports
+              .find(
+                  CommercialReportType.ATTENDANCES_BY_PROFESSIONAL,
+                  period,
+                  0,
+                  10,
+                  "Profissional Teste",
+                  "")
+              .totalRows());
+      assertEquals(
+          0,
+          reports
+              .find(
+                  CommercialReportType.SERVICES_PERFORMED, period, 0, 10, "", "Serviço inexistente")
+              .totalRows());
+      assertEquals(
           1, reports.find(CommercialReportType.SERVICES_PERFORMED, period, 0, 10).totalRows());
       assertEquals(2, reports.find(CommercialReportType.REVENUE, period, 0, 10).totalRows());
 
@@ -55,6 +76,55 @@ class CommercialReportsSQLiteTest {
       assertEquals("PIX", receipts.rows().getFirst().title());
       assertEquals(3_000, receipts.rows().getFirst().amountCents());
       assertEquals(1, reports.find(CommercialReportType.EXPENSES, period, 0, 10).totalRows());
+
+      var stock = reports.find(CommercialReportType.STOCK_POSITION, period, 0, 10);
+      assertEquals(2, stock.totalRows());
+      assertEquals(4_500, stock.rows().getFirst().quantity());
+      assertEquals(1, reports.find(CommercialReportType.LOW_STOCK, period, 0, 10).totalRows());
+      var consumption =
+          reports.find(
+              CommercialReportType.STOCK_CONSUMPTION,
+              period,
+              0,
+              10,
+              "Profissional Teste",
+              "Manicure");
+      assertEquals(1, consumption.totalRows());
+      assertEquals(500, consumption.rows().getFirst().quantity());
+      var commissions =
+          reports.find(
+              CommercialReportType.COMMISSION_STATEMENTS,
+              period,
+              0,
+              10,
+              "Profissional Teste",
+              "Manicure");
+      assertEquals(1, commissions.totalRows());
+      assertEquals("ESTORNADA", commissions.rows().getFirst().status());
+      assertEquals(3_000, commissions.rows().getFirst().amountCents());
+      var cashClosings = reports.find(CommercialReportType.CASH_CLOSINGS, period, 0, 10);
+      assertEquals(1, cashClosings.totalRows());
+      assertEquals(6_000, cashClosings.rows().getFirst().quantity());
+      assertEquals(5_800, cashClosings.rows().getFirst().amountCents());
+      assertTrue(cashClosings.rows().getFirst().detail().contains("Administradora"));
+      assertTrue(cashClosings.rows().getFirst().detail().contains("-2.00"));
+      var noRows =
+          reports.find(
+              CommercialReportType.STOCK_CONSUMPTION,
+              new CommercialReportPeriod(
+                  LocalDate.parse("2026-11-02"), LocalDate.parse("2027-11-02")),
+              0,
+              10);
+      assertEquals(0, noRows.totalRows());
+
+      var largePeriod =
+          new CommercialReportPeriod(LocalDate.parse("2025-11-01"), LocalDate.parse("2027-11-01"));
+      assertEquals(25_000, reports.summarize(largePeriod).revenueCents());
+      assertThrows(
+          IllegalArgumentException.class,
+          () ->
+              new CommercialReportPeriod(
+                  LocalDate.parse("2025-11-01"), LocalDate.parse("2027-11-02")));
 
       var summary = reports.summarize(period);
       assertEquals(25_000, summary.revenueCents());
@@ -159,6 +229,52 @@ class CommercialReportsSQLiteTest {
           "INSERT INTO estorno_recebimento (id,recebimento_id,movimento_caixa_id,valor_centavos,chave_idempotencia,motivo,estornado_por_usuario_id,estornado_em_utc) VALUES ('b0000000-0000-4000-8000-000000000001','90000000-0000-4000-8000-000000000001','a0000000-0000-4000-8000-000000000002',1000,'report-refund-key','Estorno parcial','"
               + USER
               + "','2026-11-01T09:00:00Z')");
+      statement.executeUpdate(
+          "INSERT INTO produto (id,nome,categoria,unidade,custo_unitario_centavos,estoque_minimo_milesimos,ativo,criado_em_utc,atualizado_em_utc) VALUES ('"
+              + PRODUCT
+              + "','Creme','Uso','MILILITRO',200,1000,1,'"
+              + NOW
+              + "','"
+              + NOW
+              + "'),('"
+              + LOW_PRODUCT
+              + "','Luvas','Uso','UNIDADE',100,500,1,'"
+              + NOW
+              + "','"
+              + NOW
+              + "')");
+      statement.executeUpdate(
+          "INSERT INTO movimento_estoque (id,produto_id,atendimento_id,atendimento_servico_id,tipo,quantidade_milesimos,custo_unitario_centavos,motivo,chave_idempotencia,criado_por_usuario_id,criado_em_utc) VALUES ('d0000000-0000-4000-8000-000000000001','"
+              + PRODUCT
+              + "',NULL,NULL,'ENTRADA',5000,200,'Compra','report-stock-entry','"
+              + USER
+              + "','2026-11-01T06:15:00Z'),('d0000000-0000-4000-8000-000000000002','"
+              + PRODUCT
+              + "','70000000-0000-4000-8000-000000000001','80000000-0000-4000-8000-000000000001','CONSUMO_SERVICO',500,200,'Consumo no atendimento','report-stock-consumption','"
+              + USER
+              + "','2026-11-01T07:15:00Z')");
+      statement.executeUpdate(
+          "INSERT INTO competencia_comissao (competencia,estado,fechada_por_usuario_id,fechada_em_utc) VALUES ('2026-11','FECHADA','"
+              + USER
+              + "','2026-11-01T07:00:00Z')");
+      statement.executeUpdate(
+          "INSERT INTO comissao (id,atendimento_servico_id,profissional_id,base_centavos,percentual_pontos_base,valor_centavos,estado,apurada_em_utc,competencia,profissional_nome_snapshot) VALUES ('e0000000-0000-4000-8000-000000000001','80000000-0000-4000-8000-000000000001','"
+              + PROFESSIONAL
+              + "',9000,3000,3000,'ESTORNADA','2026-11-01T07:00:00Z','2026-11','Profissional Teste')");
+      statement.executeUpdate(
+          "INSERT INTO conferencia_caixa (id,caixa_turno_id,fechamento_id,forma,esperado_centavos,conferido_centavos,conferido_por_usuario_id,conferido_em_utc) VALUES ('f0000000-0000-4000-8000-000000000001','"
+              + CASH_TURN
+              + "','f1000000-0000-4000-8000-000000000001','DINHEIRO',3000,2900,'"
+              + USER
+              + "','2026-11-01T10:00:00Z'),('f0000000-0000-4000-8000-000000000002','"
+              + CASH_TURN
+              + "','f1000000-0000-4000-8000-000000000001','PIX',2000,1900,'"
+              + USER
+              + "','2026-11-01T10:00:00Z'),('f0000000-0000-4000-8000-000000000003','"
+              + CASH_TURN
+              + "','f1000000-0000-4000-8000-000000000001','CARTAO',1000,1000,'"
+              + USER
+              + "','2026-11-01T10:00:00Z')");
     }
   }
 

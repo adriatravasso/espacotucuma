@@ -27,6 +27,17 @@ public final class SqliteCommercialReportRepository implements CommercialReportR
   @Override
   public CommercialReportPage find(
       CommercialReportType type, CommercialReportPeriod period, int page, int pageSize) {
+    return find(type, period, page, pageSize, "", "");
+  }
+
+  @Override
+  public CommercialReportPage find(
+      CommercialReportType type,
+      CommercialReportPeriod period,
+      int page,
+      int pageSize,
+      String professionalFilter,
+      String serviceFilter) {
     Objects.requireNonNull(type);
     Objects.requireNonNull(period);
     if (page < 0 || pageSize < 1 || pageSize > MAX_PAGE_SIZE) {
@@ -40,16 +51,26 @@ public final class SqliteCommercialReportRepository implements CommercialReportR
                   + query.rows()
                   + ") report_rows ORDER BY sort_at, sort_title, sort_id LIMIT ? OFFSET ?";
           try (PreparedStatement statement = connection.prepareStatement(pagedSql)) {
-            statement.setString(1, period.fromUtc());
-            statement.setString(2, period.untilUtc());
-            int pageParameter = 3;
-            if (query.periodPairs() == 2) {
-              statement.setString(3, period.fromUtc());
-              statement.setString(4, period.untilUtc());
-              pageParameter = 5;
+            int nextParameter = 1;
+            if (query.periodPairs() >= 1) {
+              bindPeriod(statement, period, nextParameter);
+              nextParameter += 2;
             }
-            statement.setInt(pageParameter, pageSize);
-            statement.setLong(pageParameter + 1, (long) page * pageSize);
+            if (query.periodPairs() == 2) {
+              bindPeriod(statement, period, nextParameter);
+              nextParameter += 2;
+            }
+            int filterParameter = nextParameter;
+            if (query.professionalFilter()) {
+              statement.setString(filterParameter++, professionalFilter);
+              statement.setString(filterParameter++, contains(professionalFilter));
+            }
+            if (query.serviceFilter()) {
+              statement.setString(filterParameter++, serviceFilter);
+              statement.setString(filterParameter++, contains(serviceFilter));
+            }
+            statement.setInt(filterParameter, pageSize);
+            statement.setLong(filterParameter + 1, (long) page * pageSize);
             try (ResultSet rows = statement.executeQuery()) {
               var result = new ArrayList<CommercialReportRow>();
               long totalRows = 0;
@@ -121,16 +142,22 @@ public final class SqliteCommercialReportRepository implements CommercialReportR
               1);
       case ATTENDANCES_BY_PROFESSIONAL ->
           new Sql(
-              "SELECT NULL occurred_at,p.nome title,'Atendimentos concluídos' detail,'CONCLUIDO' status,COUNT(*) quantity,SUM(a.total_centavos) amount_cents,p.nome sort_at,p.nome sort_title,p.id sort_id FROM atendimento a JOIN profissional p ON p.id=a.profissional_id WHERE a.estado='CONCLUIDO' AND a.concluido_em_utc>=? AND a.concluido_em_utc<? GROUP BY p.id,p.nome",
-              1);
+              "SELECT NULL occurred_at,p.nome title,'Atendimentos concluídos' detail,'CONCLUIDO' status,COUNT(*) quantity,SUM(a.total_centavos) amount_cents,p.nome sort_at,p.nome sort_title,p.id sort_id FROM atendimento a JOIN profissional p ON p.id=a.profissional_id WHERE a.estado='CONCLUIDO' AND a.concluido_em_utc>=? AND a.concluido_em_utc<? AND (?='' OR p.nome LIKE ? COLLATE NOCASE) GROUP BY p.id,p.nome",
+              1,
+              true,
+              false);
       case SERVICES_PERFORMED ->
           new Sql(
-              "SELECT NULL occurred_at,l.nome_snapshot title,'Serviço realizado' detail,'CONCLUIDO' status,SUM(l.quantidade) quantity,SUM(l.preco_unitario_centavos*l.quantidade) amount_cents,l.nome_snapshot sort_at,l.nome_snapshot sort_title,MIN(l.id) sort_id FROM atendimento_servico l JOIN atendimento a ON a.id=l.atendimento_id WHERE a.estado='CONCLUIDO' AND a.concluido_em_utc>=? AND a.concluido_em_utc<? GROUP BY l.nome_snapshot",
-              1);
+              "SELECT NULL occurred_at,l.nome_snapshot title,'Serviço realizado' detail,'CONCLUIDO' status,SUM(l.quantidade) quantity,SUM(l.preco_unitario_centavos*l.quantidade) amount_cents,l.nome_snapshot sort_at,l.nome_snapshot sort_title,MIN(l.id) sort_id FROM atendimento_servico l JOIN atendimento a ON a.id=l.atendimento_id WHERE a.estado='CONCLUIDO' AND a.concluido_em_utc>=? AND a.concluido_em_utc<? AND (?='' OR l.nome_snapshot LIKE ? COLLATE NOCASE) GROUP BY l.nome_snapshot",
+              1,
+              false,
+              true);
       case REVENUE ->
           new Sql(
-              "SELECT a.concluido_em_utc occurred_at,c.nome title,p.nome detail,a.estado status,1 quantity,a.total_centavos amount_cents,a.concluido_em_utc sort_at,c.nome sort_title,a.id sort_id FROM atendimento a JOIN cliente c ON c.id=a.cliente_id JOIN profissional p ON p.id=a.profissional_id WHERE a.estado='CONCLUIDO' AND a.concluido_em_utc>=? AND a.concluido_em_utc<?",
-              1);
+              "SELECT a.concluido_em_utc occurred_at,c.nome title,p.nome detail,a.estado status,1 quantity,a.total_centavos amount_cents,a.concluido_em_utc sort_at,c.nome sort_title,a.id sort_id FROM atendimento a JOIN cliente c ON c.id=a.cliente_id JOIN profissional p ON p.id=a.profissional_id WHERE a.estado='CONCLUIDO' AND a.concluido_em_utc>=? AND a.concluido_em_utc<? AND (?='' OR p.nome LIKE ? COLLATE NOCASE) AND (?='' OR EXISTS (SELECT 1 FROM atendimento_servico l WHERE l.atendimento_id=a.id AND l.nome_snapshot LIKE ? COLLATE NOCASE))",
+              1,
+              true,
+              true);
       case RECEIPTS_BY_METHOD ->
           new Sql(
               "WITH receipt_events AS (SELECT r.recebido_em_utc occurred_at,r.forma method,r.valor_centavos amount_cents FROM recebimento r WHERE r.recebido_em_utc>=? AND r.recebido_em_utc<? UNION ALL SELECT e.estornado_em_utc occurred_at,r.forma method,-e.valor_centavos amount_cents FROM estorno_recebimento e JOIN recebimento r ON r.id=e.recebimento_id WHERE e.estornado_em_utc>=? AND e.estornado_em_utc<?) SELECT NULL occurred_at,method title,'Recebimentos líquidos por forma' detail,'LÍQUIDO' status,COUNT(*) quantity,SUM(amount_cents) amount_cents,method sort_at,method sort_title,method sort_id FROM receipt_events GROUP BY method",
@@ -139,6 +166,31 @@ public final class SqliteCommercialReportRepository implements CommercialReportR
           new Sql(
               "SELECT m.criado_em_utc occurred_at,m.motivo title,COALESCE(u.nome,'') detail,m.tipo status,1 quantity,m.valor_centavos amount_cents,m.criado_em_utc sort_at,m.motivo sort_title,m.id sort_id FROM movimento_caixa m LEFT JOIN usuario u ON u.id=m.criado_por_usuario_id WHERE m.tipo='SAIDA' AND m.criado_em_utc>=? AND m.criado_em_utc<?",
               1);
+      case STOCK_POSITION ->
+          new Sql(
+              stockSql()
+                  + "SELECT NULL occurred_at,p.nome title,p.unidade||' · mínimo: '||printf('%.3f',p.estoque_minimo_milesimos/1000.0) detail,'ESTOQUE' status,COALESCE(m.saldo,0) quantity,(COALESCE(m.saldo,0)*p.custo_unitario_centavos/1000) amount_cents,p.nome sort_at,p.nome sort_title,p.id sort_id FROM produto p LEFT JOIN stock_balance m ON m.produto_id=p.id WHERE p.ativo=1",
+              0);
+      case LOW_STOCK ->
+          new Sql(
+              stockSql()
+                  + "SELECT NULL occurred_at,p.nome title,p.unidade||' · mínimo: '||printf('%.3f',p.estoque_minimo_milesimos/1000.0) detail,'BAIXO' status,COALESCE(m.saldo,0) quantity,(COALESCE(m.saldo,0)*p.custo_unitario_centavos/1000) amount_cents,p.nome sort_at,p.nome sort_title,p.id sort_id FROM produto p LEFT JOIN stock_balance m ON m.produto_id=p.id WHERE p.ativo=1 AND COALESCE(m.saldo,0)<=p.estoque_minimo_milesimos",
+              0);
+      case STOCK_CONSUMPTION ->
+          new Sql(
+              "SELECT m.criado_em_utc occurred_at,pr.nome title,COALESCE(l.nome_snapshot,'')||' · '||COALESCE(p.nome,'')||' · '||u.nome detail,m.tipo status,m.quantidade_milesimos quantity,(m.quantidade_milesimos*m.custo_unitario_centavos/1000) amount_cents,m.criado_em_utc sort_at,pr.nome sort_title,m.id sort_id FROM movimento_estoque m JOIN produto pr ON pr.id=m.produto_id JOIN usuario u ON u.id=m.criado_por_usuario_id LEFT JOIN atendimento_servico l ON l.id=m.atendimento_servico_id LEFT JOIN atendimento a ON a.id=m.atendimento_id LEFT JOIN profissional p ON p.id=a.profissional_id WHERE m.tipo='CONSUMO_SERVICO' AND m.criado_em_utc>=? AND m.criado_em_utc<? AND (?='' OR COALESCE(p.nome,'') LIKE ? COLLATE NOCASE) AND (?='' OR COALESCE(l.nome_snapshot,'') LIKE ? COLLATE NOCASE)",
+              1,
+              true,
+              true);
+      case COMMISSION_STATEMENTS ->
+          new Sql(
+              "SELECT a.concluido_em_utc occurred_at,COALESCE(c.profissional_nome_snapshot,p.nome) title,l.nome_snapshot detail,c.estado status,1 quantity,c.valor_centavos amount_cents,a.concluido_em_utc sort_at,COALESCE(c.profissional_nome_snapshot,p.nome) sort_title,c.id sort_id FROM comissao c JOIN atendimento_servico l ON l.id=c.atendimento_servico_id JOIN atendimento a ON a.id=l.atendimento_id JOIN profissional p ON p.id=c.profissional_id WHERE a.concluido_em_utc>=? AND a.concluido_em_utc<? AND (?='' OR COALESCE(c.profissional_nome_snapshot,p.nome) LIKE ? COLLATE NOCASE) AND (?='' OR l.nome_snapshot LIKE ? COLLATE NOCASE)",
+              1,
+              true,
+              true);
+      case CASH_CLOSINGS ->
+          new Sql(
+              "SELECT MAX(cc.conferido_em_utc) occurred_at,'Fechamento '||substr(cc.fechamento_id,1,8) title,u.nome||' · diferença: R$ '||printf('%.2f',(SUM(cc.conferido_centavos)-SUM(cc.esperado_centavos))/100.0) detail,'FECHADO' status,SUM(cc.esperado_centavos) quantity,SUM(cc.conferido_centavos) amount_cents,MAX(cc.conferido_em_utc) sort_at,cc.fechamento_id sort_title,cc.fechamento_id sort_id FROM conferencia_caixa cc JOIN caixa_turno t ON t.id=cc.caixa_turno_id JOIN usuario u ON u.id=cc.conferido_por_usuario_id WHERE cc.conferido_em_utc>=? AND cc.conferido_em_utc<? GROUP BY cc.fechamento_id,u.nome");
     };
   }
 
@@ -148,5 +200,22 @@ public final class SqliteCommercialReportRepository implements CommercialReportR
     statement.setString(start + 1, period.untilUtc());
   }
 
-  private record Sql(String rows, int periodPairs) {}
+  private static String stockSql() {
+    return "WITH stock_balance AS (SELECT produto_id,SUM(CASE WHEN tipo='ENTRADA' OR (tipo='AJUSTE' AND direcao_ajuste='ENTRADA') THEN quantidade_milesimos WHEN tipo IN ('SAIDA','CONSUMO_SERVICO') OR (tipo='AJUSTE' AND direcao_ajuste='SAIDA') THEN -quantidade_milesimos ELSE 0 END) saldo FROM movimento_estoque GROUP BY produto_id) ";
+  }
+
+  private static String contains(String value) {
+    return "%" + value + "%";
+  }
+
+  private record Sql(
+      String rows, int periodPairs, boolean professionalFilter, boolean serviceFilter) {
+    private Sql(String rows) {
+      this(rows, 1, false, false);
+    }
+
+    private Sql(String rows, int periodPairs) {
+      this(rows, periodPairs, false, false);
+    }
+  }
 }
