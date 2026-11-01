@@ -17,12 +17,33 @@ public final class QueryCommercialReportsUseCase {
 
   public CommercialReportPage find(
       CommercialReportType type, CommercialReportPeriod period, int page, int pageSize) {
-    authorization.require(Permission.REPORTS_VIEW);
+    return find(type, period, page, pageSize, "", "");
+  }
+
+  public CommercialReportPage find(
+      CommercialReportType type,
+      CommercialReportPeriod period,
+      int page,
+      int pageSize,
+      String professionalFilter,
+      String serviceFilter) {
+    Objects.requireNonNull(type);
+    switch (type) {
+      case STOCK_POSITION, LOW_STOCK, STOCK_CONSUMPTION ->
+          authorization.require(Permission.INVENTORY_READ);
+      case COMMISSION_STATEMENTS -> authorization.require(Permission.COMMISSION_RULE_MANAGE);
+      default -> authorization.require(Permission.REPORTS_VIEW);
+    }
     if (page < 0 || pageSize < 1 || pageSize > 200) {
       throw new IllegalArgumentException("A paginação deve conter de 1 a 200 linhas.");
     }
     return reports.find(
-        Objects.requireNonNull(type), Objects.requireNonNull(period), page, pageSize);
+        type,
+        Objects.requireNonNull(period),
+        page,
+        pageSize,
+        Objects.requireNonNull(professionalFilter).strip(),
+        Objects.requireNonNull(serviceFilter).strip());
   }
 
   public CommercialReportSummary summarize(CommercialReportPeriod period) {
