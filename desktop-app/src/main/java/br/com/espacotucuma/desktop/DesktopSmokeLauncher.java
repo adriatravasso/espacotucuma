@@ -1,6 +1,7 @@
 package br.com.espacotucuma.desktop;
 
 import javafx.application.Application;
+import br.com.espacotucuma.desktop.ui.TucumaDesktopApplication;
 
 public final class DesktopSmokeLauncher {
 

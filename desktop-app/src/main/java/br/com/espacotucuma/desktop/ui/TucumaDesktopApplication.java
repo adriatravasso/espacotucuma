@@ -1,4 +1,4 @@
-package br.com.espacotucuma.desktop;
+package br.com.espacotucuma.desktop.ui;
 
 import javafx.application.Application;
 import javafx.application.Platform;
