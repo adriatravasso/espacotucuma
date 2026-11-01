@@ -7,6 +7,7 @@ import br.com.espacotucuma.desktop.application.commission.CommissionService;
 import br.com.espacotucuma.desktop.application.commission.MaintainCommissionRuleUseCase;
 import br.com.espacotucuma.desktop.application.config.DesktopEnvironment;
 import br.com.espacotucuma.desktop.application.config.DesktopPreferences;
+import br.com.espacotucuma.desktop.application.finance.RegisterPaymentUseCase;
 import br.com.espacotucuma.desktop.application.identity.AuthorizationService;
 import br.com.espacotucuma.desktop.application.identity.ChangeLocalPasswordUseCase;
 import br.com.espacotucuma.desktop.application.identity.ChangeUserRoleUseCase;
@@ -18,6 +19,7 @@ import br.com.espacotucuma.desktop.application.identity.SessionContext;
 import br.com.espacotucuma.desktop.application.port.attendance.AttendanceRepository;
 import br.com.espacotucuma.desktop.application.port.client.ClientRepository;
 import br.com.espacotucuma.desktop.application.port.commission.CommissionRuleRepository;
+import br.com.espacotucuma.desktop.application.port.finance.PaymentRepository;
 import br.com.espacotucuma.desktop.application.port.prepaid.PrepaidPackageRepository;
 import br.com.espacotucuma.desktop.application.port.professional.ProfessionalRepository;
 import br.com.espacotucuma.desktop.application.port.scheduling.AppointmentRepository;
@@ -35,7 +37,9 @@ import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteClientRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteCommissionRuleRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteInitialSetupRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteLocalCredentialRepository;
+import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteOpenCashTurnRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteOutboxRepository;
+import br.com.espacotucuma.desktop.infrastructure.sqlite.SqlitePaymentRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqlitePrepaidPackageRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteProfessionalRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteProtectionStatusRepository;
@@ -70,6 +74,7 @@ public final class DesktopRuntime implements AutoCloseable {
   private final AppointmentRepository appointments;
   private final MaintainAppointmentUseCase maintainAppointment;
   private final MaintainAttendanceUseCase maintainAttendance;
+  private final RegisterPaymentUseCase registerPayment;
   private final AuthorizationService authorization;
   private final CreateFirstAdministratorUseCase createFirstAdministrator;
   private final ChangeLocalPasswordUseCase changeLocalPassword;
@@ -99,6 +104,7 @@ public final class DesktopRuntime implements AutoCloseable {
       AppointmentRepository appointments,
       MaintainAppointmentUseCase maintainAppointment,
       MaintainAttendanceUseCase maintainAttendance,
+      RegisterPaymentUseCase registerPayment,
       AuthorizationService authorization,
       CreateFirstAdministratorUseCase createFirstAdministrator,
       ChangeLocalPasswordUseCase changeLocalPassword,
@@ -126,6 +132,7 @@ public final class DesktopRuntime implements AutoCloseable {
     this.appointments = appointments;
     this.maintainAppointment = maintainAppointment;
     this.maintainAttendance = maintainAttendance;
+    this.registerPayment = registerPayment;
     this.authorization = authorization;
     this.createFirstAdministrator = createFirstAdministrator;
     this.changeLocalPassword = changeLocalPassword;
@@ -250,6 +257,17 @@ public final class DesktopRuntime implements AutoCloseable {
               authorization,
               audit,
               stationId);
+      PaymentRepository payments = new SqlitePaymentRepository(database.connection(), unitOfWork);
+      RegisterPaymentUseCase registerPayment =
+          new RegisterPaymentUseCase(
+              unitOfWork,
+              attendances,
+              payments,
+              new SqliteOpenCashTurnRepository(database.connection(), unitOfWork),
+              new SqliteOutboxRepository(database.connection(), unitOfWork),
+              authorization,
+              audit,
+              stationId);
       CreateFirstAdministratorUseCase createFirstAdministrator =
           new CreateFirstAdministratorUseCase(
               unitOfWork,
@@ -294,6 +312,7 @@ public final class DesktopRuntime implements AutoCloseable {
           appointments,
           maintainAppointment,
           maintainAttendance,
+          registerPayment,
           authorization,
           createFirstAdministrator,
           changeLocalPassword,
@@ -375,6 +394,10 @@ public final class DesktopRuntime implements AutoCloseable {
 
   public MaintainAttendanceUseCase maintainAttendance() {
     return maintainAttendance;
+  }
+
+  public RegisterPaymentUseCase registerPayment() {
+    return registerPayment;
   }
 
   public AuthorizationService authorization() {

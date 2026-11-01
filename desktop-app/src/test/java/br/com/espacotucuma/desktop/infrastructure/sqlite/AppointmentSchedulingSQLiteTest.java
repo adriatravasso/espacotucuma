@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import br.com.espacotucuma.desktop.application.attendance.AttendanceStatus;
 import br.com.espacotucuma.desktop.application.attendance.MaintainAttendanceUseCase;
+import br.com.espacotucuma.desktop.application.finance.PaymentMethod;
+import br.com.espacotucuma.desktop.application.finance.RegisterPaymentUseCase;
 import br.com.espacotucuma.desktop.application.identity.AuthenticatedUser;
 import br.com.espacotucuma.desktop.application.identity.AuthorizationException;
 import br.com.espacotucuma.desktop.application.identity.AuthorizationService;
@@ -312,6 +314,105 @@ class AppointmentSchedulingSQLiteTest {
   }
 
   @Test
+  void partialPaymentsAreExactIdempotentAndAtomicWithCashMovement(@TempDir Path temp)
+      throws Exception {
+    try (Fixture fixture = new Fixture(temp.resolve("partial-payments.sqlite"))) {
+      var appointment = fixture.createAt(9, 0);
+      fixture.maintain.confirm(appointment.id());
+      var attendance = fixture.attendance.startFromAppointment(appointment.id());
+      fixture.attendance.addService(attendance.id(), fixture.serviceId, 1);
+      assertThrows(
+          IllegalStateException.class,
+          () ->
+              fixture.payments.register(
+                  attendance.id(),
+                  PaymentMethod.PIX,
+                  Money.of("8.33"),
+                  "payment-before-completion"));
+      fixture.attendance.complete(attendance.id());
+
+      assertThrows(
+          IllegalStateException.class,
+          () ->
+              fixture.payments.register(
+                  attendance.id(), PaymentMethod.PIX, Money.of("8.33"), "payment-no-cash"));
+      assertEquals(0, fixture.scalar("SELECT COUNT(*) FROM recebimento"));
+      fixture.openCashTurn();
+      fixture.execute(
+          "CREATE TRIGGER trg_test_reject_cash_movement BEFORE INSERT ON movimento_caixa "
+              + "WHEN NEW.tipo='ENTRADA' BEGIN SELECT RAISE(ABORT, 'caixa rejeitou entrada'); END");
+      assertThrows(
+          IllegalStateException.class,
+          () ->
+              fixture.payments.register(
+                  attendance.id(), PaymentMethod.PIX, Money.of("8.33"), "payment-first"));
+      assertEquals(0, fixture.scalar("SELECT COUNT(*) FROM recebimento"));
+      assertEquals(
+          0, fixture.scalar("SELECT COUNT(*) FROM operacao_pendente WHERE entidade='recebimento'"));
+      fixture.execute("DROP TRIGGER trg_test_reject_cash_movement");
+
+      var first =
+          fixture.payments.register(
+              attendance.id(), PaymentMethod.PIX, Money.of("8.33"), "payment-first");
+      var repeated =
+          fixture.payments.register(
+              attendance.id(), PaymentMethod.PIX, Money.of("8.33"), "payment-first");
+      assertEquals(first.id(), repeated.id());
+      assertThrows(
+          IllegalStateException.class,
+          () ->
+              fixture.payments.register(
+                  attendance.id(), PaymentMethod.PIX, Money.of("8.34"), "payment-first"));
+      assertEquals(833, fixture.scalar("SELECT valor_centavos FROM recebimento"));
+      assertEquals(1, fixture.scalar("SELECT COUNT(*) FROM movimento_caixa WHERE tipo='ENTRADA'"));
+      assertEquals(
+          833,
+          fixture
+              .payments
+              .summary(attendance.id())
+              .received()
+              .amount()
+              .movePointRight(2)
+              .intValueExact());
+      assertEquals(
+          1667,
+          fixture
+              .payments
+              .summary(attendance.id())
+              .outstanding()
+              .amount()
+              .movePointRight(2)
+              .intValueExact());
+      assertThrows(
+          IllegalArgumentException.class,
+          () ->
+              fixture.payments.register(
+                  attendance.id(), PaymentMethod.DINHEIRO, Money.of("16.68"), "payment-too-much"));
+      assertEquals(1, fixture.scalar("SELECT COUNT(*) FROM recebimento"));
+
+      fixture.payments.register(
+          attendance.id(), PaymentMethod.DINHEIRO, Money.of("8.33"), "payment-second");
+      fixture.payments.register(
+          attendance.id(), PaymentMethod.CARTAO, Money.of("8.34"), "payment-third");
+      var settled = fixture.payments.summary(attendance.id());
+      assertTrue(settled.settled());
+      assertEquals(2500, settled.received().amount().movePointRight(2).intValueExact());
+      assertEquals(0, settled.outstanding().amount().movePointRight(2).intValueExact());
+      assertEquals(3, fixture.payments.findForAttendance(attendance.id()).size());
+      assertEquals(3, fixture.scalar("SELECT COUNT(*) FROM recebimento"));
+      assertEquals(3, fixture.scalar("SELECT COUNT(*) FROM movimento_caixa WHERE tipo='ENTRADA'"));
+      assertEquals(
+          3,
+          fixture.scalar(
+              "SELECT COUNT(*) FROM operacao_pendente WHERE entidade='recebimento' AND tipo_operacao='RECEBIMENTO_REGISTRADO'"));
+      assertEquals(
+          3,
+          fixture.scalar(
+              "SELECT COUNT(*) FROM evento_auditoria WHERE acao='RECEBIMENTO_REGISTRADO'"));
+    }
+  }
+
+  @Test
   void concurrentCreatesOnSingleConnectionCannotClaimSameSlot(@TempDir Path temp) throws Exception {
     try (Fixture fixture = new Fixture(temp.resolve("schedule-concurrent.sqlite"))) {
       CountDownLatch ready = new CountDownLatch(2);
@@ -379,6 +480,7 @@ class AppointmentSchedulingSQLiteTest {
     final SqliteAppointmentRepository appointments;
     final MaintainAppointmentUseCase maintain;
     final MaintainAttendanceUseCase attendance;
+    final RegisterPaymentUseCase payments;
     final SessionContext sessions;
     final AuthorizationService authorization;
     final UUID adminId;
@@ -442,6 +544,17 @@ class AppointmentSchedulingSQLiteTest {
               appointments,
               services,
               commissionRules,
+              outbox,
+              authorization,
+              audit,
+              STATION,
+              Clock.fixed(NOW, ZoneId.of("America/Manaus")));
+      payments =
+          new RegisterPaymentUseCase(
+              unitOfWork,
+              new SqliteAttendanceRepository(database.connection(), unitOfWork),
+              new SqlitePaymentRepository(database.connection(), unitOfWork),
+              new SqliteOpenCashTurnRepository(database.connection(), unitOfWork),
               outbox,
               authorization,
               audit,
@@ -581,6 +694,18 @@ class AppointmentSchedulingSQLiteTest {
         insert.setString(8, "2026-11-02T13:00:00Z");
         insert.executeUpdate();
       }
+    }
+
+    void openCashTurn() throws Exception {
+      execute(
+          "INSERT INTO caixa_turno (id,operador_usuario_id,estado,abertura_em_utc,saldo_abertura_centavos) "
+              + "VALUES ('"
+              + UUID.randomUUID()
+              + "','"
+              + adminId
+              + "','ABERTO','"
+              + NOW
+              + "',0)");
     }
 
     void useReceptionRole() {

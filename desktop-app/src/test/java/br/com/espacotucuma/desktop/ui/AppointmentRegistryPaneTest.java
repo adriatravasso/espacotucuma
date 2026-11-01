@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import br.com.espacotucuma.desktop.application.attendance.MaintainAttendanceUseCase;
+import br.com.espacotucuma.desktop.application.finance.RegisterPaymentUseCase;
 import br.com.espacotucuma.desktop.application.identity.AuthenticatedUser;
 import br.com.espacotucuma.desktop.application.identity.AuthorizationService;
 import br.com.espacotucuma.desktop.application.identity.CreateFirstAdministratorUseCase;
@@ -23,7 +24,9 @@ import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteAuditRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteClientRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteCommissionRuleRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteInitialSetupRepository;
+import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteOpenCashTurnRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteOutboxRepository;
+import br.com.espacotucuma.desktop.infrastructure.sqlite.SqlitePaymentRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqlitePrepaidPackageRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteProfessionalRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteServiceRepository;
@@ -87,7 +90,8 @@ class AppointmentRegistryPaneTest {
               fixture.services,
               fixture.authorization,
               fixture.attendance,
-              fixture.prepaidPackages);
+              fixture.prepaidPackages,
+              fixture.payments);
       robot.interact(() -> stage.setScene(new Scene(pane, 1180, 720)));
       robot.interact(() -> pane.datePicker().setValue(MONDAY));
 
@@ -276,6 +280,67 @@ class AppointmentRegistryPaneTest {
     }
   }
 
+  @Test
+  @Timeout(60)
+  void recordsPartialThenFullPaymentAndShowsOfflineReceivable(FxRobot robot, @TempDir Path temp)
+      throws Exception {
+    try (Fixture fixture = new Fixture(temp.resolve("payment-ui.sqlite"))) {
+      var appointment =
+          fixture.maintain.create(
+              fixture.clientId,
+              fixture.professionalId,
+              fixture.serviceId,
+              LocalDateTime.of(MONDAY, LocalTime.of(9, 0)),
+              null);
+      fixture.maintain.confirm(appointment.id());
+      var attendance = fixture.attendance.startFromAppointment(appointment.id());
+      fixture.attendance.addService(attendance.id(), fixture.serviceId, 1);
+      fixture.attendance.complete(attendance.id());
+      fixture.openCashTurn();
+
+      AppointmentRegistryPane pane =
+          new AppointmentRegistryPane(
+              fixture.maintain,
+              fixture.clients,
+              fixture.professionals,
+              fixture.services,
+              fixture.authorization,
+              fixture.attendance,
+              fixture.prepaidPackages,
+              fixture.payments);
+      robot.interact(() -> stage.setScene(new Scene(pane, 1180, 720)));
+      robot.interact(() -> pane.datePicker().setValue(MONDAY));
+      waitForRows(robot, 1);
+      robot.interact(() -> pane.appointmentTable().getSelectionModel().selectFirst());
+      assertTrue(!robot.lookup("#appointmentReceive").queryButton().isDisabled());
+      Platform.runLater(() -> robot.lookup("#appointmentReceive").queryButton().fire());
+      waitForNode(robot, "#paymentAmount");
+      assertTrue(robot.lookup("#receivableState").queryLabeled().getText().contains("ABERTO"));
+      assertTrue(robot.lookup("#receivableOutstanding").queryLabeled().getText().contains("50,00"));
+
+      robot.interact(() -> robot.lookup("#paymentAmount").queryTextInputControl().setText("25,00"));
+      Platform.runLater(() -> robot.lookup("#paymentRegister").queryButton().fire());
+      WaitForAsyncUtils.waitFor(
+          8,
+          TimeUnit.SECONDS,
+          () -> robot.lookup("#paymentHistory").queryTableView().getItems().size() == 1);
+      assertTrue(robot.lookup("#receivableReceived").queryLabeled().getText().contains("25,00"));
+      assertTrue(robot.lookup("#receivableOutstanding").queryLabeled().getText().contains("25,00"));
+
+      robot.interact(() -> robot.lookup("#paymentAmount").queryTextInputControl().setText("25,00"));
+      Platform.runLater(() -> robot.lookup("#paymentRegister").queryButton().fire());
+      WaitForAsyncUtils.waitFor(
+          8,
+          TimeUnit.SECONDS,
+          () -> robot.lookup("#receivableState").queryLabeled().getText().contains("QUITADO"));
+      assertEquals(2, robot.lookup("#paymentHistory").queryTableView().getItems().size());
+      assertTrue(robot.lookup("#receivableOutstanding").queryLabeled().getText().contains("0,00"));
+      Platform.runLater(() -> robot.lookup("Fechar").queryButton().fire());
+      assertEquals(2, fixture.scalar("SELECT COUNT(*) FROM recebimento"));
+      assertEquals(2, fixture.scalar("SELECT COUNT(*) FROM movimento_caixa WHERE tipo='ENTRADA'"));
+    }
+  }
+
   private void waitForRows(FxRobot robot, int count) throws Exception {
     WaitForAsyncUtils.waitFor(
         10,
@@ -294,6 +359,7 @@ class AppointmentRegistryPaneTest {
     final ProfessionalRepository professionals;
     final ServiceRepository services;
     final MaintainAttendanceUseCase attendance;
+    final RegisterPaymentUseCase payments;
     final PrepaidPackageRepository prepaidPackages;
     final AuthorizationService authorization;
     final MaintainAppointmentUseCase maintain;
@@ -301,6 +367,7 @@ class AppointmentRegistryPaneTest {
     final UUID professionalId = UUID.randomUUID();
     final UUID secondProfessionalId = UUID.randomUUID();
     final UUID serviceId = UUID.randomUUID();
+    final UUID adminId;
 
     Fixture(Path path) throws Exception {
       database = LocalDatabaseSession.open(path);
@@ -323,13 +390,11 @@ class AppointmentRegistryPaneTest {
               statement.executeQuery(
                   "SELECT id,nome,login FROM usuario WHERE perfil='ADMINISTRADOR'")) {
         row.next();
+        adminId = UUID.fromString(row.getString("id"));
         SessionContext sessions = new SessionContext();
         sessions.establish(
             new AuthenticatedUser(
-                UUID.fromString(row.getString("id")),
-                row.getString("nome"),
-                row.getString("login"),
-                UserRole.ADMINISTRADOR));
+                adminId, row.getString("nome"), row.getString("login"), UserRole.ADMINISTRADOR));
         authorization = new AuthorizationService(sessions);
       }
       clients = new SqliteClientRepository(database.connection(), unit);
@@ -364,6 +429,29 @@ class AppointmentRegistryPaneTest {
               audit,
               STATION,
               Clock.fixed(NOW, ZoneId.of("America/Manaus")));
+      payments =
+          new RegisterPaymentUseCase(
+              unit,
+              new SqliteAttendanceRepository(database.connection(), unit),
+              new SqlitePaymentRepository(database.connection(), unit),
+              new SqliteOpenCashTurnRepository(database.connection(), unit),
+              outbox,
+              authorization,
+              audit,
+              STATION,
+              Clock.fixed(NOW, ZoneId.of("America/Manaus")));
+    }
+
+    void openCashTurn() {
+      execute(
+          "INSERT INTO caixa_turno (id,operador_usuario_id,estado,abertura_em_utc,saldo_abertura_centavos) "
+              + "VALUES ('"
+              + UUID.randomUUID()
+              + "','"
+              + adminId
+              + "','ABERTO','"
+              + NOW
+              + "',0)");
     }
 
     private void seed() throws Exception {

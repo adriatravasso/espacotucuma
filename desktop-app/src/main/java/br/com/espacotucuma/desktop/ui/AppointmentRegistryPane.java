@@ -6,6 +6,7 @@ import br.com.espacotucuma.desktop.application.client.Client;
 import br.com.espacotucuma.desktop.application.client.ClientContactFilter;
 import br.com.espacotucuma.desktop.application.client.ClientPageQuery;
 import br.com.espacotucuma.desktop.application.client.ClientSortField;
+import br.com.espacotucuma.desktop.application.finance.RegisterPaymentUseCase;
 import br.com.espacotucuma.desktop.application.identity.AuthorizationService;
 import br.com.espacotucuma.desktop.application.identity.Permission;
 import br.com.espacotucuma.desktop.application.port.client.ClientRepository;
@@ -62,6 +63,7 @@ public final class AppointmentRegistryPane extends BorderPane {
   private final AuthorizationService authorization;
   private final MaintainAttendanceUseCase attendanceUseCase;
   private final PrepaidPackageRepository prepaidPackages;
+  private final RegisterPaymentUseCase registerPayment;
   private final DatePicker date = new DatePicker(LocalDate.now(BUSINESS_ZONE));
   private final ComboBox<String> period = new ComboBox<>();
   private final ComboBox<ProfessionalChoice> professionalFilter = new ComboBox<>();
@@ -74,6 +76,7 @@ public final class AppointmentRegistryPane extends BorderPane {
   private final Button noShow = button("Não compareceu", "appointmentNoShow");
   private final Button reschedule = button("Remarcar", "appointmentReschedule");
   private final Button cancel = button("Cancelar", "appointmentCancel");
+  private final Button receive = button("Recebimentos", "appointmentReceive");
   private Runnable mutationListener = () -> {};
 
   public AppointmentRegistryPane(
@@ -83,7 +86,8 @@ public final class AppointmentRegistryPane extends BorderPane {
       ServiceRepository services,
       AuthorizationService authorization,
       MaintainAttendanceUseCase attendanceUseCase,
-      PrepaidPackageRepository prepaidPackages) {
+      PrepaidPackageRepository prepaidPackages,
+      RegisterPaymentUseCase registerPayment) {
     this.appointments = appointments;
     this.clients = clients;
     this.professionals = professionals;
@@ -91,6 +95,7 @@ public final class AppointmentRegistryPane extends BorderPane {
     this.authorization = authorization;
     this.attendanceUseCase = attendanceUseCase;
     this.prepaidPackages = prepaidPackages;
+    this.registerPayment = registerPayment;
     date.setId("appointmentDate");
     period.setId("appointmentPeriod");
     period.getItems().setAll("Dia", "Semana");
@@ -126,6 +131,7 @@ public final class AppointmentRegistryPane extends BorderPane {
     noShow.setOnAction(event -> markNoShow());
     reschedule.setOnAction(event -> rescheduleAppointment());
     cancel.setOnAction(event -> cancelAppointment());
+    receive.setOnAction(event -> showPayments());
     Button details = button("Detalhes", "appointmentDetails");
     details.setOnAction(event -> showDetails());
     table
@@ -149,7 +155,8 @@ public final class AppointmentRegistryPane extends BorderPane {
     HBox filters =
         new HBox(7, previous, today, next, date, period, professionalFilter, statusFilter);
     filters.setPadding(new Insets(8));
-    HBox commands = new HBox(6, create, confirm, start, noShow, reschedule, cancel, details);
+    HBox commands =
+        new HBox(6, create, confirm, start, receive, noShow, reschedule, cancel, details);
     commands.setPadding(new Insets(6, 8, 6, 8));
     availability.setWrapText(true);
     availability.setPadding(new Insets(7, 9, 7, 9));
@@ -455,6 +462,27 @@ public final class AppointmentRegistryPane extends BorderPane {
     alert.showAndWait();
   }
 
+  private void showPayments() {
+    AppointmentRow row = selected();
+    if (row == null || row.appointment().status() != AppointmentStatus.CONCLUIDO) return;
+    try {
+      Attendance attendance = registerPayment.findAttendanceByAppointment(row.appointment().id());
+      new PaymentDialog(
+              registerPayment,
+              attendance.id(),
+              row.clientName(),
+              row.professionalName(),
+              mutationListener)
+          .showAndWait();
+      refresh();
+    } catch (RuntimeException failure) {
+      message.setText(
+          failure.getMessage() == null
+              ? "Não foi possível abrir os recebimentos do atendimento."
+              : failure.getMessage());
+    }
+  }
+
   private void run(Runnable action) {
     try {
       action.run();
@@ -491,6 +519,10 @@ public final class AppointmentRegistryPane extends BorderPane {
             ? "Continuar atendimento"
             : "Iniciar atendimento");
     start.setDisable(!authorization.isAllowed(Permission.ATTENDANCE_RECORD) || !canOpenAttendance);
+    receive.setDisable(
+        !authorization.isAllowed(Permission.PAYMENT_RECORD)
+            || row == null
+            || row.appointment().status() != AppointmentStatus.CONCLUIDO);
     noShow.setDisable(!canManage || !pending);
     reschedule.setDisable(!canManage || !pending);
     cancel.setDisable(!canManage || !pending);
