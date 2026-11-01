@@ -14,6 +14,7 @@ import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteClientRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteUnitOfWork;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.PreparedStatement;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -36,6 +37,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
+import org.sqlite.SQLiteErrorCode;
+import org.sqlite.SQLiteException;
 import org.testfx.api.FxRobot;
 import org.testfx.framework.junit5.ApplicationExtension;
 import org.testfx.framework.junit5.Start;
@@ -234,6 +237,34 @@ class PagedTablePaneTest {
 
   @Test
   @Timeout(30)
+  void diagnosesFullLocalDiskWithoutShowingDriverDetails(FxRobot robot) throws Exception {
+    PagedTablePane<Client> table =
+        new PagedTablePane<>(
+            columns(),
+            Map.of("ALL", "Todos"),
+            Map.of("NAME", "Nome"),
+            10,
+            request -> {
+              throw new IllegalStateException(
+                  "Falha do repositório",
+                  new SQLiteException("database or disk is full", SQLiteErrorCode.SQLITE_FULL));
+            },
+            null,
+            null);
+    robot.interact(() -> stage.setScene(new Scene(table, 1366, 768)));
+    WaitForAsyncUtils.waitFor(
+        5,
+        TimeUnit.SECONDS,
+        () -> robot.lookup("#tableMessage").queryLabeled().getText().contains("sem espaço"));
+
+    String message = robot.lookup("#tableMessage").queryLabeled().getText();
+    assertTrue(message.contains("registro não foi confirmado"));
+    assertTrue(message.contains("dados anteriores foram preservados"));
+    assertFalse(message.contains("database or disk is full"));
+  }
+
+  @Test
+  @Timeout(30)
   void longLocalQueryLeavesTheWindowResponsive(FxRobot robot) throws Exception {
     CountDownLatch queryStarted = new CountDownLatch(1);
     CountDownLatch allowQueryToFinish = new CountDownLatch(1);
@@ -266,6 +297,75 @@ class PagedTablePaneTest {
     assertEquals("Maria", robot.lookup("#tableSearch").queryTextInputControl().getText());
     allowQueryToFinish.countDown();
     waitForPage(robot, "0 registros");
+  }
+
+  @Test
+  @Timeout(45)
+  void searchesThreeThousandClientsAtMinimumTargetResolution(FxRobot robot, @TempDir Path temp)
+      throws Exception {
+    try (LocalDatabaseSession database =
+        LocalDatabaseSession.open(temp.resolve("clients-volume.sqlite"))) {
+      SqliteUnitOfWork unitOfWork = new SqliteUnitOfWork(database.connection());
+      SqliteClientRepository repository =
+          new SqliteClientRepository(database.connection(), unitOfWork);
+      database.connection().setAutoCommit(false);
+      try (PreparedStatement insert =
+          database
+              .connection()
+              .prepareStatement(
+                  "INSERT INTO cliente (id,codigo_interno,nome,telefone,ativo,criado_em_utc,atualizado_em_utc) "
+                      + "VALUES (?,?,?,?,1,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')")) {
+        for (int index = 0; index < 3000; index++) {
+          insert.setString(
+              1,
+              UUID.nameUUIDFromBytes(
+                      ("volume-client-" + index).getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                  .toString());
+          insert.setString(2, "CLI-%06d".formatted(index + 1));
+          insert.setString(3, "Cliente Volume %04d".formatted(index));
+          insert.setString(4, "929%07d".formatted(index));
+          insert.addBatch();
+        }
+        insert.executeBatch();
+        database.connection().commit();
+      } finally {
+        database.connection().setAutoCommit(true);
+      }
+
+      AtomicInteger loads = new AtomicInteger();
+      PagedTablePane<Client> table = createTable(repository, loads, null, null);
+      robot.interact(
+          () -> {
+            stage.setScene(new Scene(table, 1366, 768));
+            stage.setWidth(1366);
+            stage.setHeight(768);
+          });
+      assertEquals(1366, (int) stage.getScene().getWidth());
+      assertEquals(768, (int) stage.getScene().getHeight());
+      waitForPage(robot, "1 / 300");
+      assertEquals(10, tableItems(robot).size());
+      assertEquals(3000, repository.searchPage(query(0, 10)).totalItems());
+      assertEquals(
+          "Pesquisar", robot.lookup("#tableSearch").queryTextInputControl().getPromptText());
+      assertEquals(
+          "Novo registro indisponível nesta área.",
+          robot.lookup("#tableNew").queryButton().getAccessibleHelp());
+      assertEquals(
+          "Estado das consultas e confirmações de gravação local.",
+          robot.lookup("#tableMessage").queryLabeled().getAccessibleHelp());
+
+      long started = System.nanoTime();
+      robot.interact(
+          () ->
+              robot.lookup("#tableSearch").queryTextInputControl().setText("Cliente Volume 2999"));
+      waitForPage(robot, "1 / 1");
+      long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+
+      assertTrue(
+          elapsedMillis < 5000, "Local search took " + elapsedMillis + " ms for 3000 clients");
+      assertEquals("Cliente Volume 2999", tableItems(robot).getFirst().name());
+      System.out.println("TUC53_CLIENT_SEARCH_3000_MS=" + elapsedMillis);
+    }
   }
 
   private PagedTablePane<Client> createTable(
@@ -356,5 +456,10 @@ class PagedTablePaneTest {
             return clientIndex;
           });
     }
+  }
+
+  private ClientPageQuery query(int pageIndex, int pageSize) {
+    return new ClientPageQuery(
+        "", ClientContactFilter.ALL, ClientSortField.NAME, true, pageIndex, pageSize);
   }
 }
