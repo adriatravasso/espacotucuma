@@ -64,6 +64,8 @@ public final class AppointmentRegistryPane extends BorderPane {
   private final Label availability = new Label();
   private final Label message = new Label();
   private final Button confirm = button("Confirmar", "appointmentConfirm");
+  private final Button start = button("Iniciar atendimento", "appointmentStart");
+  private final Button noShow = button("Não compareceu", "appointmentNoShow");
   private final Button reschedule = button("Remarcar", "appointmentReschedule");
   private final Button cancel = button("Cancelar", "appointmentCancel");
   private Runnable mutationListener = () -> {};
@@ -110,6 +112,8 @@ public final class AppointmentRegistryPane extends BorderPane {
     Button create = button("Novo agendamento", "appointmentNew");
     create.setOnAction(event -> createAppointment());
     confirm.setOnAction(event -> confirmAppointment());
+    start.setOnAction(event -> startAttendance());
+    noShow.setOnAction(event -> markNoShow());
     reschedule.setOnAction(event -> rescheduleAppointment());
     cancel.setOnAction(event -> cancelAppointment());
     Button details = button("Detalhes", "appointmentDetails");
@@ -135,7 +139,7 @@ public final class AppointmentRegistryPane extends BorderPane {
     HBox filters =
         new HBox(7, previous, today, next, date, period, professionalFilter, statusFilter);
     filters.setPadding(new Insets(8));
-    HBox commands = new HBox(6, create, confirm, reschedule, cancel, details);
+    HBox commands = new HBox(6, create, confirm, start, noShow, reschedule, cancel, details);
     commands.setPadding(new Insets(6, 8, 6, 8));
     availability.setWrapText(true);
     availability.setPadding(new Insets(7, 9, 7, 9));
@@ -354,6 +358,28 @@ public final class AppointmentRegistryPane extends BorderPane {
     if (row != null) run(() -> appointments.confirm(row.appointment().id()));
   }
 
+  private void startAttendance() {
+    AppointmentRow row = selected();
+    if (row != null) run(() -> appointments.startAttendance(row.appointment().id()));
+  }
+
+  private void markNoShow() {
+    AppointmentRow row = selected();
+    if (row == null) return;
+    Dialog<String> dialog = new Dialog<>();
+    dialog.setTitle("Registrar ausência");
+    dialog.setHeaderText("Informe o motivo da falta");
+    TextField reason = new TextField();
+    reason.setId("appointmentNoShowReason");
+    dialog.getDialogPane().setContent(reason);
+    dialog.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
+    dialog.setResultConverter(button -> button == ButtonType.OK ? reason.getText() : null);
+    dialog
+        .showAndWait()
+        .filter(text -> !text.isBlank())
+        .ifPresent(text -> run(() -> appointments.markNoShow(row.appointment().id(), text)));
+  }
+
   private void cancelAppointment() {
     AppointmentRow row = selected();
     if (row == null) return;
@@ -415,8 +441,17 @@ public final class AppointmentRegistryPane extends BorderPane {
     boolean canManage = authorization.isAllowed(Permission.SCHEDULE_MANAGE);
     confirm.setDisable(
         !canManage || row == null || row.appointment().status() != AppointmentStatus.AGENDADO);
-    reschedule.setDisable(!canManage || row == null || !row.appointment().occupiesTime());
-    cancel.setDisable(!canManage || row == null || !row.appointment().occupiesTime());
+    boolean pending =
+        row != null
+            && (row.appointment().status() == AppointmentStatus.AGENDADO
+                || row.appointment().status() == AppointmentStatus.CONFIRMADO);
+    start.setDisable(
+        !authorization.isAllowed(Permission.ATTENDANCE_RECORD)
+            || row == null
+            || row.appointment().status() != AppointmentStatus.CONFIRMADO);
+    noShow.setDisable(!canManage || !pending);
+    reschedule.setDisable(!canManage || !pending);
+    cancel.setDisable(!canManage || !pending);
   }
 
   private static Button button(String title, String id) {

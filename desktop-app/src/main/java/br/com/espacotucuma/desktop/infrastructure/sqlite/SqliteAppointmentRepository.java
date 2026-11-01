@@ -154,38 +154,43 @@ public final class SqliteAppointmentRepository implements AppointmentRepository 
   }
 
   @Override
-  public void cancel(UUID id, LocalDateTime updatedAt) {
+  public void transition(
+      UUID id, AppointmentStatus expected, AppointmentStatus next, LocalDateTime updatedAt) {
     requireTransaction();
     try (PreparedStatement statement =
         connection.prepareStatement(
-            "UPDATE agendamento SET estado='CANCELADO',atualizado_em_utc=? "
-                + "WHERE id=? AND estado IN ('AGENDADO','CONFIRMADO')")) {
-      statement.setString(1, toUtc(updatedAt));
-      statement.setString(2, id.toString());
+            "UPDATE agendamento SET estado=?,atualizado_em_utc=? WHERE id=? AND estado=?")) {
+      statement.setString(1, next.name());
+      statement.setString(2, toUtc(updatedAt));
+      statement.setString(3, id.toString());
+      statement.setString(4, expected.name());
       if (statement.executeUpdate() != 1) {
         throw new IllegalStateException(
-            "O agendamento deixou de estar disponível para cancelamento.");
+            "O agendamento mudou de situação e não pode ser atualizado.");
       }
     } catch (SQLException failure) {
-      throw new IllegalStateException("Não foi possível cancelar o agendamento local.", failure);
+      throw new IllegalStateException(
+          "Não foi possível atualizar o estado local do agendamento.", failure);
     }
   }
 
   @Override
-  public void confirm(UUID id, LocalDateTime updatedAt) {
-    requireTransaction();
-    try (PreparedStatement statement =
-        connection.prepareStatement(
-            "UPDATE agendamento SET estado='CONFIRMADO',atualizado_em_utc=? "
-                + "WHERE id=? AND estado='AGENDADO'")) {
-      statement.setString(1, toUtc(updatedAt));
-      statement.setString(2, id.toString());
-      if (statement.executeUpdate() != 1) {
-        throw new IllegalStateException("Somente agendamentos pendentes podem ser confirmados.");
-      }
-    } catch (SQLException failure) {
-      throw new IllegalStateException("Não foi possível confirmar o agendamento local.", failure);
-    }
+  public boolean hasCompletedAttendance(UUID appointmentId, UUID attendanceId) {
+    return unitOfWork.read(
+        () -> {
+          try (PreparedStatement statement =
+              connection.prepareStatement(
+                  "SELECT 1 FROM atendimento WHERE id=? AND agendamento_id=? AND estado='CONCLUIDO'")) {
+            statement.setString(1, attendanceId.toString());
+            statement.setString(2, appointmentId.toString());
+            try (ResultSet rows = statement.executeQuery()) {
+              return rows.next();
+            }
+          } catch (SQLException failure) {
+            throw new IllegalStateException(
+                "Não foi possível validar o atendimento associado.", failure);
+          }
+        });
   }
 
   private Appointment read(ResultSet row) throws SQLException {

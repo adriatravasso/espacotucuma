@@ -51,4 +51,25 @@ public record Appointment(
         || status == AppointmentStatus.CONFIRMADO
         || status == AppointmentStatus.EM_ATENDIMENTO;
   }
+
+  public Appointment transitionTo(AppointmentStatus next, LocalDateTime changedAt) {
+    Objects.requireNonNull(next, "next");
+    Objects.requireNonNull(changedAt, "changedAt");
+    if (!status.allowsTransitionTo(next)) {
+      throw new IllegalStateException("Transição inválida de " + status + " para " + next + ".");
+    }
+    LocalDateTime updated = changedAt.isBefore(updatedAt) ? updatedAt : changedAt;
+    return new Appointment(
+        id,
+        clientId,
+        professionalId,
+        serviceId,
+        startsAt,
+        endsAt,
+        next,
+        notes,
+        createdBy,
+        createdAt,
+        updated);
+  }
 }
