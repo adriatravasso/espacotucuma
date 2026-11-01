@@ -1,5 +1,8 @@
 package br.com.espacotucuma.sync;
 
+import br.com.espacotucuma.sync.contract.ApiErrorResponse;
+import br.com.espacotucuma.sync.contract.SyncErrorCode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -19,9 +22,11 @@ final class SyncAuthenticationFilter extends OncePerRequestFilter {
   static final String DEVICE_ID = SyncAuthenticationFilter.class.getName() + ".deviceId";
 
   private final JdbcTemplate jdbc;
+  private final ObjectMapper objectMapper;
 
-  SyncAuthenticationFilter(JdbcTemplate jdbc) {
+  SyncAuthenticationFilter(JdbcTemplate jdbc, ObjectMapper objectMapper) {
     this.jdbc = jdbc;
+    this.objectMapper = objectMapper;
   }
 
   @Override
@@ -42,7 +47,7 @@ final class SyncAuthenticationFilter extends OncePerRequestFilter {
         DeviceAuthenticationController.bearer(
             request.getHeader(HttpHeaders.AUTHORIZATION), "Bearer");
     if (accessToken == null) {
-      writeUnauthorized(response);
+      writeError(response, SyncErrorCode.AUTHORIZATION_REQUIRED);
       return;
     }
 
@@ -57,7 +62,7 @@ final class SyncAuthenticationFilter extends OncePerRequestFilter {
                     UUID.fromString(rs.getString("id"))),
             DeviceAuthenticationController.hash(accessToken));
     if (devices.isEmpty()) {
-      writeUnauthorized(response);
+      writeError(response, SyncErrorCode.AUTHORIZATION_REQUIRED);
       return;
     }
 
@@ -67,11 +72,12 @@ final class SyncAuthenticationFilter extends OncePerRequestFilter {
     chain.doFilter(request, response);
   }
 
-  private static void writeUnauthorized(HttpServletResponse response) throws IOException {
+  private void writeError(HttpServletResponse response, SyncErrorCode code) throws IOException {
     response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
     response.setContentType("application/json");
     response.setCharacterEncoding("UTF-8");
-    response.getWriter().write("{\"code\":\"SYNC_UNAUTHORIZED\"}");
+    response.setHeader("Cache-Control", "no-store");
+    objectMapper.writeValue(response.getWriter(), new ApiErrorResponse(code));
   }
 
   private record AuthenticatedDevice(UUID establishmentId, UUID deviceId) {}

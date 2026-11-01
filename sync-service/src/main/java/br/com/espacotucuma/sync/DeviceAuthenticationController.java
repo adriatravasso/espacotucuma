@@ -1,5 +1,7 @@
 package br.com.espacotucuma.sync;
 
+import br.com.espacotucuma.sync.contract.ApiErrorResponse;
+import br.com.espacotucuma.sync.contract.SyncErrorCode;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
@@ -8,7 +10,6 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.HexFormat;
-import java.util.Map;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.CacheControl;
@@ -17,7 +18,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -54,7 +54,8 @@ class DeviceAuthenticationController {
             && (request.establishmentName() == null
                 || request.establishmentName().trim().length() < 2
                 || request.establishmentName().trim().length() > 160))) {
-      return ResponseEntity.badRequest().body(Map.of("code", "INVALID_ENROLLMENT_REQUEST"));
+      return ResponseEntity.badRequest()
+          .body(new ApiErrorResponse(SyncErrorCode.VALIDATION_FAILED));
     }
 
     UUID establishmentId = request.establishmentId();
@@ -92,7 +93,8 @@ class DeviceAuthenticationController {
         || request.deviceName() == null
         || request.deviceName().trim().length() < 2
         || request.deviceName().trim().length() > 120) {
-      return ResponseEntity.badRequest().body(Map.of("code", "INVALID_PAIRING_REQUEST"));
+      return ResponseEntity.badRequest()
+          .body(new ApiErrorResponse(SyncErrorCode.VALIDATION_FAILED));
     }
 
     var enrollment =
@@ -118,7 +120,7 @@ class DeviceAuthenticationController {
             establishmentId);
     if (activeDevices != null && activeDevices > 0) {
       return ResponseEntity.status(HttpStatus.CONFLICT)
-          .body(Map.of("code", "ACTIVE_STATION_ALREADY_EXISTS"));
+          .body(new ApiErrorResponse(SyncErrorCode.CONFLICT));
     }
 
     UUID deviceId = UUID.randomUUID();
@@ -187,11 +189,6 @@ class DeviceAuthenticationController {
     return ResponseEntity.noContent().build();
   }
 
-  @GetMapping("/status")
-  Map<String, Object> status() {
-    return Map.of("authenticated", true);
-  }
-
   boolean isProvisioningAdmin(String authorization) {
     String secret = bearer(authorization, "Bearer");
     return secret != null
@@ -199,10 +196,10 @@ class DeviceAuthenticationController {
         && MessageDigest.isEqual(provisioningSecret, secret.getBytes(StandardCharsets.UTF_8));
   }
 
-  static ResponseEntity<Map<String, String>> unauthorized() {
+  static ResponseEntity<ApiErrorResponse> unauthorized() {
     return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
         .cacheControl(CacheControl.noStore())
-        .body(Map.of("code", "SYNC_UNAUTHORIZED"));
+        .body(new ApiErrorResponse(SyncErrorCode.AUTHORIZATION_REQUIRED));
   }
 
   private static <T> ResponseEntity<T> noStore(T body) {
