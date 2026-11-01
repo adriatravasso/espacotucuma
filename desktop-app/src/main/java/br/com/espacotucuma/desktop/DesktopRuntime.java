@@ -35,11 +35,13 @@ import br.com.espacotucuma.desktop.application.port.service.ServiceRepository;
 import br.com.espacotucuma.desktop.application.port.synchronization.DeviceCredentialStore;
 import br.com.espacotucuma.desktop.application.port.synchronization.ManualSynchronizationPort;
 import br.com.espacotucuma.desktop.application.port.synchronization.RemoteChangeRepository;
+import br.com.espacotucuma.desktop.application.port.synchronization.RemoteConflictRepository;
 import br.com.espacotucuma.desktop.application.prepaid.MaintainPrepaidPackagesUseCase;
 import br.com.espacotucuma.desktop.application.professional.MaintainProfessionalUseCase;
 import br.com.espacotucuma.desktop.application.reports.QueryCommercialReportsUseCase;
 import br.com.espacotucuma.desktop.application.scheduling.MaintainAppointmentUseCase;
 import br.com.espacotucuma.desktop.application.service.MaintainServiceUseCase;
+import br.com.espacotucuma.desktop.application.synchronization.ResolveRemoteConflictUseCase;
 import br.com.espacotucuma.desktop.infrastructure.security.Pbkdf2PasswordHasher;
 import br.com.espacotucuma.desktop.infrastructure.security.WindowsCredentialStore;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.LocalDatabaseSession;
@@ -62,6 +64,7 @@ import br.com.espacotucuma.desktop.infrastructure.sqlite.SqlitePrepaidPackageRep
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteProfessionalRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteProtectionStatusRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteRemoteChangeRepository;
+import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteRemoteConflictRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteServiceRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteUnitOfWork;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteUserAdministrationRepository;
@@ -113,6 +116,8 @@ public final class DesktopRuntime implements AutoCloseable {
   private final MaintainInventoryUseCase maintainInventory;
   private final QueryCommercialReportsUseCase commercialReports;
   private final ManualSynchronizationPort manualSynchronization;
+  private final RemoteConflictRepository remoteConflicts;
+  private final ResolveRemoteConflictUseCase resolveRemoteConflict;
 
   private DesktopRuntime(
       LocalDatabaseSession database,
@@ -149,6 +154,8 @@ public final class DesktopRuntime implements AutoCloseable {
       MaintainInventoryUseCase maintainInventory,
       QueryCommercialReportsUseCase commercialReports,
       ManualSynchronizationPort manualSynchronization,
+      RemoteConflictRepository remoteConflicts,
+      ResolveRemoteConflictUseCase resolveRemoteConflict,
       boolean testProfile) {
     this.database = database;
     this.logHandler = logHandler;
@@ -184,6 +191,8 @@ public final class DesktopRuntime implements AutoCloseable {
     this.maintainInventory = maintainInventory;
     this.commercialReports = commercialReports;
     this.manualSynchronization = manualSynchronization;
+    this.remoteConflicts = remoteConflicts;
+    this.resolveRemoteConflict = resolveRemoteConflict;
     this.testProfile = testProfile;
   }
 
@@ -376,6 +385,11 @@ public final class DesktopRuntime implements AutoCloseable {
           new SqliteUserAdministrationRepository(database.connection(), unitOfWork);
       SqliteProtectionStatusRepository protectionStatus =
           new SqliteProtectionStatusRepository(database.connection(), unitOfWork);
+      RemoteConflictRepository remoteConflicts =
+          new SqliteRemoteConflictRepository(database.connection(), unitOfWork);
+      ResolveRemoteConflictUseCase resolveRemoteConflict =
+          new ResolveRemoteConflictUseCase(
+              unitOfWork, remoteConflicts, authorization, audit, stationId);
       OutboxRepository outbox = new SqliteOutboxRepository(database.connection(), unitOfWork);
       ManualSynchronizationPort manualSynchronization =
           createManualSynchronization(outbox, unitOfWork, database.connection());
@@ -419,6 +433,8 @@ public final class DesktopRuntime implements AutoCloseable {
           maintainInventory,
           commercialReports,
           manualSynchronization,
+          remoteConflicts,
+          resolveRemoteConflict,
           environment.profile()
               == br.com.espacotucuma.desktop.application.config.EnvironmentProfile.TEST);
     } catch (IOException | java.sql.SQLException | RuntimeException error) {
@@ -559,6 +575,14 @@ public final class DesktopRuntime implements AutoCloseable {
 
   public ManualSynchronizationPort manualSynchronization() {
     return manualSynchronization;
+  }
+
+  public RemoteConflictRepository remoteConflicts() {
+    return remoteConflicts;
+  }
+
+  public ResolveRemoteConflictUseCase resolveRemoteConflict() {
+    return resolveRemoteConflict;
   }
 
   private static ManualSynchronizationPort createManualSynchronization(

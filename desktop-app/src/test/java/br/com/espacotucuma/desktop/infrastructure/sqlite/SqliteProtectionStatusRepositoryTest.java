@@ -7,8 +7,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import br.com.espacotucuma.desktop.application.ProtectionStatus;
 import br.com.espacotucuma.desktop.application.outbox.PendingOperation;
+import br.com.espacotucuma.sync.contract.ChangesResponse;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -104,6 +108,81 @@ class SqliteProtectionStatusRepositoryTest {
       assertEquals(2, persisted.synchronizationGeneration());
       assertEquals("backup-validado-1", persisted.validatedBackupId());
       assertEquals("Dados sincronizados; backup pendente", persisted.protectionMessage());
+    }
+  }
+
+  @Test
+  void unresolvedOrUnbackedConflictPreventsBackupCompletedStatus(@TempDir Path temp)
+      throws Exception {
+    try (LocalDatabaseSession database =
+        LocalDatabaseSession.open(temp.resolve("conflict-protection.sqlite"))) {
+      SqliteUnitOfWork unit = new SqliteUnitOfWork(database.connection());
+      SqliteProtectionStatusRepository protection =
+          new SqliteProtectionStatusRepository(database.connection(), unit);
+      SqliteRemoteChangeRepository incoming =
+          new SqliteRemoteChangeRepository(
+              database.connection(),
+              unit,
+              new ObjectMapper(),
+              UUID.fromString("30000000-0000-0000-0000-000000000001"));
+      Instant backupAt = Instant.parse("2026-11-01T12:00:00Z");
+      unit.execute(
+          () -> {
+            protection.recordSynchronization(backupAt);
+            protection.recordValidatedBackup("backup-before-conflict", backupAt);
+            return null;
+          });
+
+      UUID operationId = UUID.randomUUID();
+      UUID sourceDevice = UUID.fromString("40000000-0000-0000-0000-000000000001");
+      Instant conflictAt = Instant.now();
+      unit.execute(
+          () -> {
+            incoming.applyPage(
+                0,
+                new ChangesResponse(
+                    1,
+                    1,
+                    List.of(
+                        new ChangesResponse.RemoteChange(
+                            1,
+                            operationId,
+                            sourceDevice,
+                            "cliente",
+                            UUID.fromString("50000000-0000-0000-0000-000000000001"),
+                            "CLIENTE_ALTERADO",
+                            1,
+                            2,
+                            "ACEITA",
+                            Map.of("nome", "Remoto")))));
+            return null;
+          });
+
+      ProtectionStatus unresolved = protection.load("Admin", database.databaseFile());
+      assertEquals(1, unresolved.pendingOperations());
+      assertFalse(unresolved.backupCompletedForCurrentState());
+
+      unit.execute(
+          () -> {
+            new SqliteRemoteConflictRepository(database.connection(), unit)
+                .recordDecision(
+                    operationId,
+                    UUID.randomUUID(),
+                    conflictAt.plusSeconds(1),
+                    "Manter cadastro local e preservar a versão remota.");
+            return null;
+          });
+      ProtectionStatus resolvedButNotBackedUp = protection.load("Admin", database.databaseFile());
+      assertEquals(1, resolvedButNotBackedUp.pendingOperations());
+      assertFalse(resolvedButNotBackedUp.backupCompletedForCurrentState());
+
+      unit.execute(
+          () -> {
+            protection.recordValidatedBackup("backup-after-conflict", conflictAt.plusSeconds(2));
+            return null;
+          });
+      assertTrue(
+          protection.load("Admin", database.databaseFile()).backupCompletedForCurrentState());
     }
   }
 }
