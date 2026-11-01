@@ -3,16 +3,20 @@ package br.com.espacotucuma.sync;
 import br.com.espacotucuma.sync.contract.BackupRequest;
 import br.com.espacotucuma.sync.contract.BackupResponse;
 import br.com.espacotucuma.sync.contract.BackupsResponse;
+import br.com.espacotucuma.sync.contract.RestoreResponse;
 import br.com.espacotucuma.sync.contract.SyncContract;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
+import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
+import java.util.Base64;
 import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
@@ -33,6 +37,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 class BackupSnapshotService {
   private static final int SNAPSHOT_FORMAT_VERSION = 1;
   private static final Logger LOGGER = LoggerFactory.getLogger(BackupSnapshotService.class);
+  private static final SecureRandom RANDOM = new SecureRandom();
+  private static final Duration DOWNLOAD_AUTHORIZATION_LIFETIME = Duration.ofMinutes(10);
   private final JdbcTemplate jdbc;
   private final BackupObjectStorage storage;
   private final ObjectMapper objectMapper;
@@ -148,6 +154,94 @@ class BackupSnapshotService {
 
   boolean verify(UUID establishmentId, UUID backupId) {
     return verifyBackup(establishmentId, backupId) == VerificationResult.INTEGRO;
+  }
+
+  RestoreResponse authorizeDownload(UUID establishmentId, UUID deviceId, UUID backupId) {
+    List<StoredBackup> candidates =
+        jdbc.query(
+            "SELECT id, sequencia, chave_armazenamento, checksum_sha256, versao_formato, criado_em "
+                + "FROM backup_remoto WHERE id = ? AND estabelecimento_id = ? "
+                + "AND estado = 'VALIDADO'",
+            (rs, row) ->
+                new StoredBackup(
+                    rs.getObject("id", UUID.class),
+                    rs.getLong("sequencia"),
+                    rs.getString("chave_armazenamento"),
+                    rs.getString("checksum_sha256").trim(),
+                    rs.getInt("versao_formato"),
+                    rs.getTimestamp("criado_em").toInstant()),
+            backupId,
+            establishmentId);
+    if (candidates.isEmpty()
+        || !verifyBackup(establishmentId, backupId).equals(VerificationResult.INTEGRO)) {
+      throw new IllegalArgumentException("Ponto de recuperação indisponível ou inválido.");
+    }
+    StoredBackup backup = candidates.getFirst();
+    byte[] content = storage.get(backup.key());
+    if (!backup.checksum().equals(sha256(content))) {
+      throw new IllegalArgumentException("Ponto de recuperação indisponível ou inválido.");
+    }
+    Snapshot snapshot = decode(content);
+    String authorization = newDownloadAuthorization();
+    Instant expiresAt = Instant.now().plus(DOWNLOAD_AUTHORIZATION_LIFETIME);
+    jdbc.update(
+        "INSERT INTO autorizacao_download_backup "
+            + "(token_hash, backup_id, dispositivo_id, expira_em) VALUES (?, ?, ?, ?)",
+        DeviceAuthenticationController.hash(authorization),
+        backupId,
+        deviceId,
+        Timestamp.from(expiresAt));
+    return new RestoreResponse(
+        SyncContract.VERSION,
+        backupId,
+        "AUTHORIZED",
+        authorization,
+        expiresAt,
+        backup.checksum(),
+        snapshot.schemaVersion());
+  }
+
+  @org.springframework.transaction.annotation.Transactional
+  BackupDownload consumeDownload(UUID establishmentId, UUID deviceId, String authorization) {
+    List<StoredBackup> authorized =
+        jdbc.query(
+            "SELECT b.id, b.sequencia, b.chave_armazenamento, b.checksum_sha256, "
+                + "b.versao_formato, b.criado_em FROM autorizacao_download_backup a "
+                + "JOIN backup_remoto b ON b.id = a.backup_id "
+                + "WHERE a.token_hash = ? AND a.dispositivo_id = ? "
+                + "AND b.estabelecimento_id = ? AND a.usada_em IS NULL AND a.expira_em > now() "
+                + "AND b.estado = 'VALIDADO' AND b.resultado_verificacao = 'INTEGRO' "
+                + "FOR UPDATE OF a",
+            (rs, row) ->
+                new StoredBackup(
+                    rs.getObject("id", UUID.class),
+                    rs.getLong("sequencia"),
+                    rs.getString("chave_armazenamento"),
+                    rs.getString("checksum_sha256").trim(),
+                    rs.getInt("versao_formato"),
+                    rs.getTimestamp("criado_em").toInstant()),
+            DeviceAuthenticationController.hash(authorization),
+            deviceId,
+            establishmentId);
+    if (authorized.isEmpty()) throw new DeviceAuthorizationException();
+    StoredBackup backup = authorized.getFirst();
+    byte[] content = storage.get(backup.key());
+    if (!backup.checksum().equals(sha256(content))
+        || verifyBackup(establishmentId, backup.id()) != VerificationResult.INTEGRO) {
+      throw new IllegalStateException(
+          "O ponto de recuperação falhou na verificação de integridade.");
+    }
+    jdbc.update(
+        "UPDATE autorizacao_download_backup SET usada_em = now() WHERE token_hash = ? AND usada_em IS NULL",
+        DeviceAuthenticationController.hash(authorization));
+    Snapshot snapshot = decode(content);
+    return new BackupDownload(backup.id(), backup.checksum(), snapshot.schemaVersion(), content);
+  }
+
+  private static String newDownloadAuthorization() {
+    byte[] bytes = new byte[32];
+    RANDOM.nextBytes(bytes);
+    return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
   }
 
   BackupsResponse listVerified(UUID establishmentId) {
@@ -463,4 +557,6 @@ class BackupSnapshotService {
       String checksum,
       int formatVersion,
       Instant createdAt) {}
+
+  record BackupDownload(UUID backupId, String checksumSha256, int schemaVersion, byte[] content) {}
 }

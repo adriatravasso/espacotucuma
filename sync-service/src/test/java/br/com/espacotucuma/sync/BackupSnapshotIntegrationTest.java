@@ -4,8 +4,15 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import br.com.espacotucuma.sync.contract.BackupRequest;
+import br.com.espacotucuma.sync.contract.RestoreRequest;
+import br.com.espacotucuma.sync.contract.SyncContract;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.security.MessageDigest;
@@ -19,6 +26,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
@@ -27,6 +35,8 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -34,6 +44,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @SpringBootTest(
     properties = "tucuma.security.sync-secret=backup-test-secret-with-more-than-32-chars")
 @Import(BackupSnapshotIntegrationTest.SimulatedStorageConfiguration.class)
+@AutoConfigureMockMvc
 @Testcontainers
 class BackupSnapshotIntegrationTest {
   @Container
@@ -48,12 +59,14 @@ class BackupSnapshotIntegrationTest {
   }
 
   @Autowired private JdbcTemplate jdbc;
+  @Autowired private MockMvc mockMvc;
   @Autowired private BackupSnapshotService service;
   @Autowired private SimulatedBackupObjectStorage storage;
   @Autowired private ObjectMapper objectMapper;
 
   @BeforeEach
   void clearDatabaseAndStorage() {
+    jdbc.update("DELETE FROM autorizacao_download_backup");
     jdbc.update("DELETE FROM entidade_remota_sincronizada");
     jdbc.update("DELETE FROM estado_reconciliado");
     jdbc.update("DELETE FROM operacao_recebida");
@@ -62,6 +75,108 @@ class BackupSnapshotIntegrationTest {
     jdbc.update("DELETE FROM dispositivo_autorizado");
     jdbc.update("DELETE FROM estabelecimento_remoto");
     storage.clear();
+  }
+
+  @Test
+  void authenticatedRestoreDownloadsVerifiedSnapshotOnceForReplacementStation() throws Exception {
+    UUID establishmentId = createEstablishment();
+    UUID deviceId = UUID.randomUUID();
+    String credential = "replacement-station-credential";
+    jdbc.update(
+        "INSERT INTO dispositivo_autorizado (id, estabelecimento_id, nome, estado, credencial_hash) "
+            + "VALUES (?, ?, 'Estação nova', 'ATIVO', ?)",
+        deviceId,
+        establishmentId,
+        DeviceAuthenticationController.hash(credential));
+    String accessToken = "replacement-access-token";
+    jdbc.update(
+        "INSERT INTO token_acesso_dispositivo (token_hash, dispositivo_id, expira_em) VALUES (?, ?, ?)",
+        DeviceAuthenticationController.hash(accessToken),
+        deviceId,
+        java.sql.Timestamp.from(Instant.now().plusSeconds(900)));
+    UUID backupId = seedValidBackup(establishmentId, 7, Instant.now());
+
+    MvcResult authorizationResult =
+        mockMvc
+            .perform(
+                post("/sync/restore-request")
+                    .header("Authorization", "Bearer " + accessToken)
+                    .header(SyncContract.VERSION_HEADER, SyncContract.VERSION)
+                    .contentType("application/json")
+                    .content(objectMapper.writeValueAsString(new RestoreRequest(1, backupId))))
+            .andExpect(status().isOk())
+            .andExpect(header().string("Cache-Control", "no-store"))
+            .andExpect(jsonPath("$.status").value("AUTHORIZED"))
+            .andExpect(jsonPath("$.backupId").value(backupId.toString()))
+            .andExpect(jsonPath("$.schemaVersion").value(5))
+            .andReturn();
+    JsonNode authorization =
+        objectMapper.readTree(authorizationResult.getResponse().getContentAsByteArray());
+    String downloadAuthorization = authorization.path("downloadAuthorization").asText();
+
+    MvcResult download =
+        mockMvc
+            .perform(
+                get("/sync/restore-download")
+                    .header("Authorization", "Bearer " + accessToken)
+                    .header("X-Tucuma-Download-Authorization", downloadAuthorization))
+            .andExpect(status().isOk())
+            .andExpect(header().string("Cache-Control", "no-store"))
+            .andExpect(header().string("X-Tucuma-Backup-Id", backupId.toString()))
+            .andExpect(
+                header()
+                    .string(
+                        "X-Tucuma-Backup-SHA256", authorization.path("checksumSha256").asText()))
+            .andExpect(header().string("X-Tucuma-Schema-Version", "5"))
+            .andReturn();
+    assertTrue(
+        Arrays.equals(
+            storage.get(storage.keyFor(backupId)), download.getResponse().getContentAsByteArray()));
+    mockMvc
+        .perform(
+            get("/sync/restore-download")
+                .header("Authorization", "Bearer " + accessToken)
+                .header("X-Tucuma-Download-Authorization", downloadAuthorization))
+        .andExpect(status().isUnauthorized());
+  }
+
+  @Test
+  void restoreRequestRejectsMissingAndInvalidDeviceCredentials() throws Exception {
+    UUID establishmentId = createEstablishment();
+    UUID deviceId = UUID.randomUUID();
+    String accessToken = "restore-request-valid-token";
+    jdbc.update(
+        "INSERT INTO dispositivo_autorizado (id, estabelecimento_id, nome, estado, credencial_hash) "
+            + "VALUES (?, ?, 'Estação', 'ATIVO', ?)",
+        deviceId,
+        establishmentId,
+        DeviceAuthenticationController.hash("device-credential"));
+    jdbc.update(
+        "INSERT INTO token_acesso_dispositivo (token_hash, dispositivo_id, expira_em) VALUES (?, ?, ?)",
+        DeviceAuthenticationController.hash(accessToken),
+        deviceId,
+        java.sql.Timestamp.from(Instant.now().plusSeconds(900)));
+    UUID backupId = seedValidBackup(establishmentId, 7, Instant.now());
+    String body = objectMapper.writeValueAsString(new RestoreRequest(1, backupId));
+
+    mockMvc
+        .perform(
+            post("/sync/restore-request")
+                .header(SyncContract.VERSION_HEADER, SyncContract.VERSION)
+                .contentType("application/json")
+                .content(body))
+        .andExpect(status().isUnauthorized());
+    mockMvc
+        .perform(
+            post("/sync/restore-request")
+                .header("Authorization", "Bearer invalid-device-token")
+                .header(SyncContract.VERSION_HEADER, SyncContract.VERSION)
+                .contentType("application/json")
+                .content(body))
+        .andExpect(status().isUnauthorized());
+
+    assertEquals(
+        0, jdbc.queryForObject("SELECT COUNT(*) FROM autorizacao_download_backup", Integer.class));
   }
 
   @Test
@@ -85,7 +200,7 @@ class BackupSnapshotIntegrationTest {
     byte[] bytes = storage.get(key);
     JsonNode snapshot = objectMapper.readTree(bytes);
     assertEquals(1, snapshot.get("formatVersion").asInt());
-    assertEquals(5, snapshot.get("schemaVersion").asInt());
+    assertEquals(6, snapshot.get("schemaVersion").asInt());
     assertEquals(fixture.checkpoint(), snapshot.get("checkpoint").asLong());
     assertEquals(1, snapshot.get("manifest").get("entityCount").asInt());
     assertEquals(1, snapshot.get("manifest").get("reconciliationCount").asInt());

@@ -3,6 +3,7 @@ package br.com.espacotucuma.sync;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -128,6 +129,77 @@ class DeviceAuthenticationIntegrationTest {
                         new DeviceAuthenticationController.PairingRequest(
                             enrollment.pairingCode(), "Duplicada"))))
         .andExpect(status().isUnauthorized());
+  }
+
+  @Test
+  void stationReplacementRevokesOldStationBeforePairingTheNewOne() throws Exception {
+    Enrollment originalEnrollment = enrollNewEstablishment("Salão de teste");
+    Pairing originalStation = pair(originalEnrollment.pairingCode(), "Estação antiga");
+    AccessToken originalToken = issueAccessToken(originalStation);
+
+    String replacementResponse =
+        mockMvc
+            .perform(
+                post("/sync/admin/station-replacements")
+                    .header("Authorization", "Bearer " + ADMIN_SECRET)
+                    .contentType("application/json")
+                    .content(
+                        objectMapper.writeValueAsString(
+                            new DeviceAuthenticationController.StationReplacementRequest(
+                                originalEnrollment.establishmentId(), "Estação nova"))))
+            .andExpect(status().isOk())
+            .andExpect(header().string("Cache-Control", "no-store"))
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+    Enrollment replacementEnrollment =
+        objectMapper.readValue(replacementResponse, Enrollment.class);
+
+    assertEquals(
+        "REVOGADO",
+        jdbc.queryForObject(
+            "SELECT estado FROM dispositivo_autorizado WHERE id = ?",
+            String.class,
+            originalStation.deviceId()));
+    assertNull(
+        jdbc.queryForObject(
+            "SELECT credencial_hash FROM dispositivo_autorizado WHERE id = ?",
+            String.class,
+            originalStation.deviceId()));
+    mockMvc
+        .perform(
+            get("/sync/status")
+                .header("Authorization", "Bearer " + originalToken.accessToken())
+                .header(SyncContract.VERSION_HEADER, SyncContract.VERSION))
+        .andExpect(status().isUnauthorized());
+    mockMvc
+        .perform(
+            post("/sync/restore-request")
+                .header("Authorization", "Bearer " + originalToken.accessToken())
+                .header(SyncContract.VERSION_HEADER, SyncContract.VERSION)
+                .contentType("application/json")
+                .content(
+                    objectMapper.writeValueAsString(
+                        new br.com.espacotucuma.sync.contract.RestoreRequest(
+                            1, UUID.randomUUID()))))
+        .andExpect(status().isUnauthorized());
+
+    Pairing replacementStation = pair(replacementEnrollment.pairingCode(), "Estação nova");
+    AccessToken replacementToken = issueAccessToken(replacementStation);
+    mockMvc
+        .perform(
+            get("/sync/status")
+                .header("Authorization", "Bearer " + replacementToken.accessToken())
+                .header(SyncContract.VERSION_HEADER, SyncContract.VERSION))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.deviceId").value(replacementStation.deviceId().toString()));
+    assertEquals(
+        1,
+        jdbc.queryForObject(
+            "SELECT COUNT(*) FROM dispositivo_autorizado "
+                + "WHERE estabelecimento_id = ? AND estado = 'ATIVO'",
+            Integer.class,
+            originalEnrollment.establishmentId()));
   }
 
   @Test

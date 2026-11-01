@@ -20,12 +20,15 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.CacheControl;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -202,13 +205,43 @@ class SyncContractController {
   }
 
   @PostMapping("/restore-request")
-  ResponseEntity<ApiErrorResponse> requestRestore(@RequestBody RestoreRequest request) {
+  ResponseEntity<?> requestRestore(
+      @RequestBody RestoreRequest request, HttpServletRequest httpRequest) {
     SyncContractValidator.validate(request);
-    return notImplemented();
+    UUID establishmentId =
+        (UUID) httpRequest.getAttribute(SyncAuthenticationFilter.ESTABLISHMENT_ID);
+    UUID deviceId = (UUID) httpRequest.getAttribute(SyncAuthenticationFilter.DEVICE_ID);
+    try {
+      return ResponseEntity.ok()
+          .cacheControl(CacheControl.noStore())
+          .body(
+              backupSnapshotService.authorizeDownload(
+                  establishmentId, deviceId, request.backupId()));
+    } catch (IllegalArgumentException invalidBackup) {
+      return ResponseEntity.status(HttpStatus.NOT_FOUND)
+          .cacheControl(CacheControl.noStore())
+          .body(new ApiErrorResponse(SyncErrorCode.VALIDATION_FAILED));
+    }
   }
 
-  private static ResponseEntity<ApiErrorResponse> notImplemented() {
-    return ResponseEntity.status(HttpStatus.NOT_IMPLEMENTED)
-        .body(new ApiErrorResponse(SyncErrorCode.NOT_IMPLEMENTED));
+  @GetMapping("/restore-download")
+  ResponseEntity<byte[]> downloadRestore(
+      @RequestHeader("X-Tucuma-Download-Authorization") String authorization,
+      HttpServletRequest httpRequest) {
+    UUID establishmentId =
+        (UUID) httpRequest.getAttribute(SyncAuthenticationFilter.ESTABLISHMENT_ID);
+    UUID deviceId = (UUID) httpRequest.getAttribute(SyncAuthenticationFilter.DEVICE_ID);
+    BackupSnapshotService.BackupDownload download =
+        backupSnapshotService.consumeDownload(establishmentId, deviceId, authorization);
+    return ResponseEntity.ok()
+        .cacheControl(CacheControl.noStore())
+        .header(
+            HttpHeaders.CONTENT_DISPOSITION,
+            "attachment; filename=backup-" + download.backupId() + ".json")
+        .header("X-Tucuma-Backup-Id", download.backupId().toString())
+        .header("X-Tucuma-Backup-SHA256", download.checksumSha256())
+        .header("X-Tucuma-Schema-Version", Integer.toString(download.schemaVersion()))
+        .contentType(MediaType.APPLICATION_JSON)
+        .body(download.content());
   }
 }
