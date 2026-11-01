@@ -36,3 +36,7 @@ No macOS/Linux:
 Os scripts chamam `clean verify` pelo Maven Wrapper. O teste do desktop abre uma janela JavaFX em modo smoke e encerra; o teste do serviço verifica o endpoint Actuator sem iniciar outro processo nem depender de banco ou credenciais.
 
 Para iniciar a janela desktop, execute `../mvnw javafx:run` dentro de `desktop-app`. Para iniciar o serviço isoladamente, execute `../mvnw spring-boot:run` dentro de `sync-service`.
+
+## Ambientes locais
+
+O desktop usa `-Dtucuma.profile=development`, `test`, `demo` ou `homologation`; por padrão, os dados ficam fora do checkout em `~/.espacotucuma/<perfil>`. O perfil `test` usa o diretório temporário do sistema. `-Dtucuma.data-root=<caminho>` define outra raiz, mantendo uma subpasta por perfil. Bancos SQLite (`*.db`, `*.sqlite`, `*.sqlite3`) são ignorados pelo Git.

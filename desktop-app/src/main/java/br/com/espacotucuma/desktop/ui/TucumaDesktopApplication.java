@@ -1,5 +1,6 @@
 package br.com.espacotucuma.desktop.ui;
 
+import br.com.espacotucuma.desktop.application.config.DesktopEnvironment;
 import javafx.application.Application;
 import javafx.application.Platform;
 import javafx.scene.Scene;
@@ -22,6 +23,7 @@ public final class TucumaDesktopApplication extends Application {
     }
 
     public static void main(String[] args) {
+        DesktopEnvironment.current();
         launch(args);
     }
 }
