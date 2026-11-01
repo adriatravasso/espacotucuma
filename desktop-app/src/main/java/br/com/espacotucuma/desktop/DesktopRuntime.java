@@ -18,12 +18,15 @@ import br.com.espacotucuma.desktop.application.port.client.ClientRepository;
 import br.com.espacotucuma.desktop.application.port.commission.CommissionRuleRepository;
 import br.com.espacotucuma.desktop.application.port.prepaid.PrepaidPackageRepository;
 import br.com.espacotucuma.desktop.application.port.professional.ProfessionalRepository;
+import br.com.espacotucuma.desktop.application.port.scheduling.AppointmentRepository;
 import br.com.espacotucuma.desktop.application.port.service.ServiceRepository;
 import br.com.espacotucuma.desktop.application.prepaid.MaintainPrepaidPackagesUseCase;
 import br.com.espacotucuma.desktop.application.professional.MaintainProfessionalUseCase;
+import br.com.espacotucuma.desktop.application.scheduling.MaintainAppointmentUseCase;
 import br.com.espacotucuma.desktop.application.service.MaintainServiceUseCase;
 import br.com.espacotucuma.desktop.infrastructure.security.Pbkdf2PasswordHasher;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.LocalDatabaseSession;
+import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteAppointmentRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteAuditRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteClientRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteCommissionRuleRepository;
@@ -61,6 +64,8 @@ public final class DesktopRuntime implements AutoCloseable {
   private final CommissionService commissions;
   private final PrepaidPackageRepository prepaidPackages;
   private final MaintainPrepaidPackagesUseCase maintainPrepaidPackages;
+  private final AppointmentRepository appointments;
+  private final MaintainAppointmentUseCase maintainAppointment;
   private final AuthorizationService authorization;
   private final CreateFirstAdministratorUseCase createFirstAdministrator;
   private final ChangeLocalPasswordUseCase changeLocalPassword;
@@ -87,6 +92,8 @@ public final class DesktopRuntime implements AutoCloseable {
       CommissionService commissions,
       PrepaidPackageRepository prepaidPackages,
       MaintainPrepaidPackagesUseCase maintainPrepaidPackages,
+      AppointmentRepository appointments,
+      MaintainAppointmentUseCase maintainAppointment,
       AuthorizationService authorization,
       CreateFirstAdministratorUseCase createFirstAdministrator,
       ChangeLocalPasswordUseCase changeLocalPassword,
@@ -111,6 +118,8 @@ public final class DesktopRuntime implements AutoCloseable {
     this.commissions = commissions;
     this.prepaidPackages = prepaidPackages;
     this.maintainPrepaidPackages = maintainPrepaidPackages;
+    this.appointments = appointments;
+    this.maintainAppointment = maintainAppointment;
     this.authorization = authorization;
     this.createFirstAdministrator = createFirstAdministrator;
     this.changeLocalPassword = changeLocalPassword;
@@ -209,6 +218,19 @@ public final class DesktopRuntime implements AutoCloseable {
               authorization,
               audit,
               stationId);
+      AppointmentRepository appointments =
+          new SqliteAppointmentRepository(database.connection(), unitOfWork);
+      MaintainAppointmentUseCase maintainAppointment =
+          new MaintainAppointmentUseCase(
+              unitOfWork,
+              appointments,
+              clients,
+              professionals,
+              services,
+              new SqliteOutboxRepository(database.connection(), unitOfWork),
+              authorization,
+              audit,
+              stationId);
       CreateFirstAdministratorUseCase createFirstAdministrator =
           new CreateFirstAdministratorUseCase(
               unitOfWork,
@@ -250,6 +272,8 @@ public final class DesktopRuntime implements AutoCloseable {
           commissions,
           prepaidPackages,
           maintainPrepaidPackages,
+          appointments,
+          maintainAppointment,
           authorization,
           createFirstAdministrator,
           changeLocalPassword,
@@ -319,6 +343,14 @@ public final class DesktopRuntime implements AutoCloseable {
 
   public MaintainPrepaidPackagesUseCase maintainPrepaidPackages() {
     return maintainPrepaidPackages;
+  }
+
+  public AppointmentRepository appointments() {
+    return appointments;
+  }
+
+  public MaintainAppointmentUseCase maintainAppointment() {
+    return maintainAppointment;
   }
 
   public AuthorizationService authorization() {
