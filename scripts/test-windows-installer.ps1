@@ -1,5 +1,5 @@
 param(
-    [string] $OutputDirectory = (Join-Path $PSScriptRoot '..\desktop-app\target\installer-smoke')
+    [string] $OutputDirectory = (Join-Path $env:TEMP ("espacotucuma-installer-smoke-" + [guid]::NewGuid().ToString('N')))
 )
 
 $ErrorActionPreference = 'Stop'

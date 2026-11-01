@@ -45,6 +45,7 @@ try {
     Pop-Location
 }
 
+New-Item -ItemType Directory -Path $output -Force | Out-Null
 Push-Location $repoRoot
 try {
     & $jarCommand --create --file (Join-Path $input $contractJarName) -C 'sync-contract\target\classes' .
