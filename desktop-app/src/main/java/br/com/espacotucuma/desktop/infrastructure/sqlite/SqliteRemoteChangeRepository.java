@@ -7,6 +7,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.HashSet;
 import java.util.Objects;
 import java.util.Set;
@@ -17,6 +20,8 @@ import java.util.UUID;
  * conflicts.
  */
 public final class SqliteRemoteChangeRepository implements RemoteChangeRepository {
+  private static final DateTimeFormatter UTC =
+      DateTimeFormatter.ofPattern("uuuu-MM-dd'T'HH:mm:ss'Z'").withZone(ZoneOffset.UTC);
   private final java.sql.Connection connection;
   private final SqliteUnitOfWork unitOfWork;
   private final ObjectMapper json;
@@ -102,6 +107,7 @@ public final class SqliteRemoteChangeRepository implements RemoteChangeRepositor
 
   private void insert(ChangesResponse.RemoteChange change) throws SQLException {
     String conflict = conflictReason(change);
+    String localPayload = findLocalPayload(change);
     String payload;
     try {
       payload = json.writeValueAsString(change.payload());
@@ -113,7 +119,9 @@ public final class SqliteRemoteChangeRepository implements RemoteChangeRepositor
             "INSERT INTO alteracao_remota_recebida "
                 + "(sequencia, operacao_id, dispositivo_origem_id, entidade, entidade_id, "
                 + "tipo_operacao, payload_versao, versao_entidade, resultado, payload_json, "
-                + "estado_local, motivo_conflito) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+                + "estado_local, motivo_conflito, payload_local_json, recebido_em_utc, "
+                + "estado_reconciliacao) "
+                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
       statement.setLong(1, change.sequence());
       statement.setString(2, change.operationId().toString());
       statement.setString(3, change.sourceDeviceId().toString());
@@ -126,7 +134,24 @@ public final class SqliteRemoteChangeRepository implements RemoteChangeRepositor
       statement.setString(10, payload);
       statement.setString(11, conflict == null ? "RECONCILIADA" : "CONFLITO");
       statement.setString(12, conflict);
+      statement.setString(13, localPayload);
+      statement.setString(14, UTC.format(Instant.now()));
+      statement.setString(15, conflict == null ? "NAO_APLICA" : "ABERTO");
       statement.executeUpdate();
+    }
+  }
+
+  private String findLocalPayload(ChangesResponse.RemoteChange change) throws SQLException {
+    try (PreparedStatement statement =
+        connection.prepareStatement(
+            "SELECT payload_json FROM operacao_pendente WHERE entidade = ? AND entidade_id = ? "
+                + "ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, rowid DESC LIMIT 1")) {
+      statement.setString(1, change.entityType());
+      statement.setString(2, change.entityId().toString());
+      statement.setString(3, change.operationId().toString());
+      try (ResultSet result = statement.executeQuery()) {
+        return result.next() ? result.getString("payload_json") : null;
+      }
     }
   }
 

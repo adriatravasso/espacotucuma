@@ -76,6 +76,9 @@ public final class TucumaDesktopApplication extends Application {
             runtime.maintainInventory(),
             runtime.authorization(),
             runtime.services());
+    ConflictResolutionPane conflictsPane =
+        new ConflictResolutionPane(
+            runtime.remoteConflicts(), runtime.resolveRemoteConflict(), runtime.authorization());
     shell =
         new TucumaMainShell(
             runtime::protectionStatus,
@@ -99,7 +102,8 @@ public final class TucumaDesktopApplication extends Application {
             cashPane,
             reportsPane,
             inventoryPane,
-            runtime.manualSynchronization());
+            runtime.manualSynchronization(),
+            conflictsPane);
     appointmentPane.setMutationListener(shell::refreshStatus);
     shell.setLogoutAction(
         () -> {

@@ -30,7 +30,11 @@ public final class SqliteProtectionStatusRepository {
               "SELECT s.sync_generation, s.last_synced_at_utc, s.backup_sync_generation, "
                   + "s.last_backup_id, "
                   + "s.last_backup_validated_at_utc, "
-                  + "(SELECT COUNT(*) FROM operacao_pendente WHERE estado = 'PENDENTE') AS pending "
+                  + "((SELECT COUNT(*) FROM operacao_pendente WHERE estado = 'PENDENTE') + "
+                  + "(SELECT COUNT(*) FROM alteracao_remota_recebida c "
+                  + "WHERE c.estado_local = 'CONFLITO' AND "
+                  + "(c.estado_reconciliacao = 'ABERTO' OR s.last_backup_validated_at_utc IS NULL "
+                  + "OR c.recebido_em_utc > s.last_backup_validated_at_utc))) AS pending "
                   + "FROM status_protecao s WHERE s.id = 1";
           try (PreparedStatement statement = connection.prepareStatement(sql);
               ResultSet result = statement.executeQuery()) {

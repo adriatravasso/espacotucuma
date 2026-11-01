@@ -45,6 +45,7 @@ final class TucumaMainShell {
   private final Parent cashView;
   private final Parent reportsView;
   private final Parent inventoryView;
+  private final Parent conflictsView;
   private final Timeline statusRefresh;
   private final ManualSynchronizationPort manualSynchronization;
   private final AtomicBoolean synchronizationRunning = new AtomicBoolean();
@@ -185,6 +186,32 @@ final class TucumaMainShell {
       Parent reportsView,
       Parent inventoryView,
       ManualSynchronizationPort manualSynchronization) {
+    this(
+        statusLoader,
+        clientsView,
+        professionalsView,
+        servicesView,
+        packagesView,
+        appointmentsView,
+        cashView,
+        reportsView,
+        inventoryView,
+        manualSynchronization,
+        null);
+  }
+
+  TucumaMainShell(
+      Supplier<ProtectionStatus> statusLoader,
+      Parent clientsView,
+      Parent professionalsView,
+      Parent servicesView,
+      Parent packagesView,
+      Parent appointmentsView,
+      Parent cashView,
+      Parent reportsView,
+      Parent inventoryView,
+      ManualSynchronizationPort manualSynchronization,
+      Parent conflictsView) {
     this.statusLoader = statusLoader;
     this.clientsView = clientsView;
     this.professionalsView = professionalsView;
@@ -195,6 +222,7 @@ final class TucumaMainShell {
     this.reportsView = reportsView;
     this.inventoryView = inventoryView;
     this.manualSynchronization = manualSynchronization;
+    this.conflictsView = conflictsView;
     root.setTop(new VBox(createMenuBar(), createToolBar()));
     root.setLeft(createNavigation());
     root.setCenter(workArea);
@@ -258,6 +286,8 @@ final class TucumaMainShell {
     }
     if (activeModule.equals("Estoque") && inventoryView instanceof InventoryPane inventoryPane)
       inventoryPane.refreshAccess();
+    if (activeModule.equals("Conflitos")
+        && conflictsView instanceof ConflictResolutionPane conflictPane) conflictPane.refresh();
   }
 
   private MenuBar createMenuBar() {
@@ -286,7 +316,10 @@ final class TucumaMainShell {
                 moduleItem("Caixa", "menu-cash"),
                 moduleItem("Estoque", "menu-inventory")),
             menu("Relatórios", moduleItem("Relatórios", "menu-reports")),
-            menu("Ferramentas", createSynchronizationMenuItem()),
+            menu(
+                "Ferramentas",
+                createSynchronizationMenuItem(),
+                moduleItem("Conflitos", "menu-sync-conflicts")),
             menu("Ajuda", item("Sobre", "menu-about", () -> showModule("Sobre"))));
     return menuBar;
   }
@@ -406,6 +439,7 @@ final class TucumaMainShell {
           "Caixa",
           "Estoque",
           "Relatórios",
+          "Conflitos",
           "Administração"
         }) {
       String id = "module-" + moduleId(module);
@@ -463,6 +497,10 @@ final class TucumaMainShell {
       inventoryPane.refreshAccess();
       inventoryPane.refresh();
       workArea.setCenter(inventoryPane);
+    } else if (module.equals("Conflitos")
+        && conflictsView instanceof ConflictResolutionPane conflictPane) {
+      conflictPane.refresh();
+      workArea.setCenter(conflictPane);
     } else {
       workArea.setCenter(placeholder);
     }
@@ -519,6 +557,7 @@ final class TucumaMainShell {
       case "Caixa" -> "cash";
       case "Estoque" -> "inventory";
       case "Relatórios" -> "reports";
+      case "Conflitos" -> "sync-conflicts";
       case "Administração" -> "administration";
       default -> module.toLowerCase(java.util.Locale.ROOT);
     };
