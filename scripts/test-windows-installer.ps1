@@ -39,13 +39,22 @@ function Find-PackagedExecutable {
         (Join-Path $env:LOCALAPPDATA 'Tucumã — Gestão'),
         (Join-Path $env:LOCALAPPDATA 'Programs\EspacoTucuma'),
         (Join-Path $env:LOCALAPPDATA 'Programs\Tucumã — Gestão'),
-        $env:LOCALAPPDATA
+        $env:LOCALAPPDATA,
+        $env:ProgramFiles,
+        ${env:ProgramFiles(x86)},
+        $env:USERPROFILE
     )
-    $uninstallRoot = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall'
-    if (Test-Path $uninstallRoot) {
-        $roots += Get-ChildItem $uninstallRoot | ForEach-Object {
-            (Get-ItemProperty $_.PSPath).InstallLocation
-        } | Where-Object { $_ }
+    $uninstallRoots = @(
+        'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall',
+        'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall',
+        'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+    )
+    foreach ($uninstallRoot in $uninstallRoots) {
+        if (Test-Path $uninstallRoot) {
+            $roots += Get-ChildItem $uninstallRoot | ForEach-Object {
+                (Get-ItemProperty $_.PSPath).InstallLocation
+            } | Where-Object { $_ }
+        }
     }
 
     foreach ($root in $roots | Select-Object -Unique) {
