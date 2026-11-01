@@ -95,7 +95,7 @@ function Invoke-PackagedSmoke {
     $process = Start-Process -FilePath $exe -ArgumentList '--smoke-test' -PassThru -Wait
     if ($process.ExitCode -ne 0) { throw "Aplicação instalada falhou: $($process.ExitCode)" }
     if (-not (Test-Path $marker)) { throw 'Aplicação não criou o banco no diretório externo de dados.' }
-    $clientId = & $java -cp "$jars\*" PackageDatabaseVerifier $marker
+    $clientId = & $java -cp "$work;$jars\*" PackageDatabaseVerifier $marker
     Assert-NativeExit 'Verificação do banco após abertura offline'
     return $clientId.Trim()
 }
@@ -154,7 +154,7 @@ try {
     if ($LASTEXITCODE -notin @(0, 3010)) { throw "Desinstalação falhou: $LASTEXITCODE" }
     $installed = $false
     if (-not (Test-Path $marker)) { throw 'Desinstalação removeu inadvertidamente o banco externo.' }
-    $clientIdAfterUninstall = & $java -cp "$jars\*" PackageDatabaseVerifier $marker
+    $clientIdAfterUninstall = & $java -cp "$work;$jars\*" PackageDatabaseVerifier $marker
     Assert-NativeExit 'Verificação do banco após desinstalação'
     if ($clientIdAfterUninstall.Trim() -ne $clientIdBeforeUpgrade) {
         throw 'Desinstalação alterou os dados do usuário.'
