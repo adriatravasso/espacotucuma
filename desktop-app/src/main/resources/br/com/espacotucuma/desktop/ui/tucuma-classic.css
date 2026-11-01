@@ -202,3 +202,22 @@
 #tableMessage {
   -fx-text-fill: #8b2525;
 }
+
+.status-separator {
+  -fx-text-fill: #8996a3;
+}
+
+.protection-local {
+  -fx-text-fill: #8a4b08;
+  -fx-font-weight: bold;
+}
+
+.protection-pending {
+  -fx-text-fill: #735b00;
+  -fx-font-weight: bold;
+}
+
+.protection-safe {
+  -fx-text-fill: #235c35;
+  -fx-font-weight: bold;
+}

@@ -4,10 +4,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import br.com.espacotucuma.desktop.application.ProtectionStatus;
 import com.tngtech.archunit.core.domain.JavaClass;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import javafx.scene.Scene;
 import javafx.scene.control.MenuBar;
 import javafx.scene.control.MenuItem;
@@ -95,5 +97,60 @@ class TucumaMainShellTest {
     assertEquals("Clientes", robot.lookup("#moduleTitle").queryLabeled().getText());
     assertEquals(
         "Usuário: Administradora Sintética", robot.lookup("#currentUser").queryLabeled().getText());
+  }
+
+  @Test
+  @Timeout(30)
+  void statusBarDistinguishesLocalPendingSynchronizedAndValidatedBackup(FxRobot robot) {
+    robot.interact(
+        () ->
+            shell.showStatus(
+                new ProtectionStatus(
+                    "Administradora Sintética",
+                    Path.of("dados/tucuma.sqlite"),
+                    2,
+                    0,
+                    null,
+                    0,
+                    null,
+                    null)));
+    assertEquals(
+        "Somente neste computador", robot.lookup("#statusProtection").queryLabeled().getText());
+    assertEquals("Pendentes: 2", robot.lookup("#statusPending").queryLabeled().getText());
+    assertEquals(
+        "Último backup validado: Nunca",
+        robot.lookup("#statusLastBackup").queryLabeled().getText());
+
+    Instant synchronization = Instant.parse("2026-10-31T15:00:00Z");
+    robot.interact(
+        () ->
+            shell.showStatus(
+                new ProtectionStatus(
+                    "Administradora Sintética",
+                    Path.of("dados/tucuma.sqlite"),
+                    0,
+                    1,
+                    synchronization,
+                    0,
+                    null,
+                    null)));
+    assertEquals(
+        "Dados sincronizados; backup pendente",
+        robot.lookup("#statusProtection").queryLabeled().getText());
+
+    robot.interact(
+        () ->
+            shell.showStatus(
+                new ProtectionStatus(
+                    "Administradora Sintética",
+                    Path.of("dados/tucuma.sqlite"),
+                    0,
+                    1,
+                    synchronization,
+                    1,
+                    "backup-sintetico-1",
+                    synchronization.plusSeconds(10))));
+    assertEquals("Backup concluído", robot.lookup("#statusProtection").queryLabeled().getText());
+    assertTrue(robot.lookup("#statusLastBackup").queryLabeled().getText().contains("31/10/2026"));
   }
 }

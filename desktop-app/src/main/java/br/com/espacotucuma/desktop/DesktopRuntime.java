@@ -18,6 +18,7 @@ import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteClientRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteInitialSetupRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteLocalCredentialRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteOutboxRepository;
+import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteProtectionStatusRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteUnitOfWork;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteUserAdministrationRepository;
 import java.io.IOException;
@@ -42,6 +43,7 @@ public final class DesktopRuntime implements AutoCloseable {
   private final DeactivateUserUseCase deactivateUser;
   private final ChangeUserRoleUseCase changeUserRole;
   private final boolean testProfile;
+  private final SqliteProtectionStatusRepository protectionStatus;
 
   private DesktopRuntime(
       LocalDatabaseSession database,
@@ -54,6 +56,7 @@ public final class DesktopRuntime implements AutoCloseable {
       LogoutUseCase logout,
       DeactivateUserUseCase deactivateUser,
       ChangeUserRoleUseCase changeUserRole,
+      SqliteProtectionStatusRepository protectionStatus,
       boolean testProfile) {
     this.database = database;
     this.logHandler = logHandler;
@@ -65,6 +68,7 @@ public final class DesktopRuntime implements AutoCloseable {
     this.logout = logout;
     this.deactivateUser = deactivateUser;
     this.changeUserRole = changeUserRole;
+    this.protectionStatus = protectionStatus;
     this.testProfile = testProfile;
   }
 
@@ -120,6 +124,8 @@ public final class DesktopRuntime implements AutoCloseable {
               sessions);
       SqliteUserAdministrationRepository userRepository =
           new SqliteUserAdministrationRepository(database.connection(), unitOfWork);
+      SqliteProtectionStatusRepository protectionStatus =
+          new SqliteProtectionStatusRepository(database.connection(), unitOfWork);
       DeactivateUserUseCase deactivateUser =
           new DeactivateUserUseCase(unitOfWork, userRepository, authorization, audit, stationId);
       ChangeUserRoleUseCase changeUserRole =
@@ -136,6 +142,7 @@ public final class DesktopRuntime implements AutoCloseable {
           new LogoutUseCase(sessions),
           deactivateUser,
           changeUserRole,
+          protectionStatus,
           environment.profile()
               == br.com.espacotucuma.desktop.application.config.EnvironmentProfile.TEST);
     } catch (IOException | java.sql.SQLException | RuntimeException error) {
@@ -184,6 +191,11 @@ public final class DesktopRuntime implements AutoCloseable {
 
   public boolean isTestProfile() {
     return testProfile;
+  }
+
+  public br.com.espacotucuma.desktop.application.ProtectionStatus protectionStatus() {
+    String userName = sessions.current().map(session -> session.user().name()).orElse("Sem sessão");
+    return protectionStatus.load(userName, database.databaseFile());
   }
 
   private static UUID stationId(java.nio.file.Path databaseFile) {

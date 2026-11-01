@@ -1,7 +1,12 @@
 package br.com.espacotucuma.desktop.ui;
 
+import br.com.espacotucuma.desktop.application.ProtectionStatus;
+import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.function.Supplier;
+import javafx.animation.KeyFrame;
+import javafx.animation.Timeline;
 import javafx.geometry.Insets;
 import javafx.scene.Parent;
 import javafx.scene.control.Button;
@@ -13,6 +18,7 @@ import javafx.scene.control.SeparatorMenuItem;
 import javafx.scene.control.ToolBar;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.VBox;
+import javafx.util.Duration;
 
 /** Main application shell; module views are filled in by their individual delivery tasks. */
 final class TucumaMainShell {
@@ -22,20 +28,31 @@ final class TucumaMainShell {
 
   private final BorderPane root = new BorderPane();
   private final BorderPane workArea = new BorderPane();
-  private final Label currentUser = new Label();
   private final Label pageTitle = new Label();
   private final Map<String, Button> moduleButtons = new LinkedHashMap<>();
+  private final StatusBar statusBar = new StatusBar();
+  private final Supplier<ProtectionStatus> statusLoader;
+  private final Timeline statusRefresh;
   private Runnable logoutAction = () -> {};
 
   TucumaMainShell(String userName) {
+    this(
+        () ->
+            new ProtectionStatus(
+                userName, Path.of("dados/tucuma.sqlite"), 0, 0, null, 0, null, null));
+  }
+
+  TucumaMainShell(Supplier<ProtectionStatus> statusLoader) {
+    this.statusLoader = statusLoader;
     root.setTop(new VBox(createMenuBar(), createToolBar()));
     root.setLeft(createNavigation());
     root.setCenter(workArea);
-    currentUser.setId("currentUser");
-    currentUser.setPadding(new Insets(4, 8, 4, 8));
-    root.setBottom(currentUser);
+    root.setBottom(statusBar);
     showModule("Início");
-    setUserName(userName);
+    refreshStatus();
+    statusRefresh = new Timeline(new KeyFrame(Duration.seconds(3), event -> refreshStatus()));
+    statusRefresh.setCycleCount(Timeline.INDEFINITE);
+    statusRefresh.play();
     TucumaTheme.apply(root);
   }
 
@@ -47,8 +64,20 @@ final class TucumaMainShell {
     logoutAction = action;
   }
 
-  void setUserName(String userName) {
-    currentUser.setText("Usuário: " + userName);
+  void refreshStatus() {
+    try {
+      statusBar.show(statusLoader.get());
+    } catch (RuntimeException failure) {
+      statusBar.showReadFailure();
+    }
+  }
+
+  void showStatus(ProtectionStatus status) {
+    statusBar.show(status);
+  }
+
+  void stopStatusRefresh() {
+    statusRefresh.stop();
   }
 
   private MenuBar createMenuBar() {

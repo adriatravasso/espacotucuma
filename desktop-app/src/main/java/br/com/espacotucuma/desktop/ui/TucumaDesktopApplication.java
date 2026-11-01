@@ -10,6 +10,7 @@ import javafx.stage.Stage;
 public final class TucumaDesktopApplication extends Application {
 
   private DesktopRuntime runtime;
+  private TucumaMainShell shell;
 
   @Override
   public void start(Stage stage) {
@@ -43,15 +44,14 @@ public final class TucumaDesktopApplication extends Application {
       return;
     }
 
-    TucumaMainShell shell =
-        new TucumaMainShell(runtime.sessions().current().orElseThrow().user().name());
+    shell = new TucumaMainShell(runtime::protectionStatus);
     shell.setLogoutAction(
         () -> {
           runtime.logout().logout();
           if (LocalLoginDialog.show(stage, runtime.login()).isEmpty()) {
             stage.close();
           } else {
-            shell.setUserName(runtime.sessions().current().orElseThrow().user().name());
+            shell.refreshStatus();
           }
         });
     stage.setTitle("Tucumã — Gestão");
@@ -78,6 +78,9 @@ public final class TucumaDesktopApplication extends Application {
 
   @Override
   public void stop() throws Exception {
+    if (shell != null) {
+      shell.stopStatusRefresh();
+    }
     if (runtime != null) {
       runtime.close();
     }
