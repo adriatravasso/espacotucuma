@@ -14,11 +14,14 @@ import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteInitialSetupRepos
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteLocalCredentialRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteLoginAttemptRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteUnitOfWork;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import javafx.application.Platform;
+import javafx.scene.Node;
+import javafx.scene.Parent;
 import javafx.scene.Scene;
 import javafx.scene.layout.StackPane;
 import javafx.stage.Stage;
@@ -79,6 +82,19 @@ class LocalLoginDialogTest {
                   .tryQuery()
                   .map(node -> node.getScene() != null && node.getScene().getWindow().isShowing())
                   .orElse(false));
+      WaitForAsyncUtils.waitForFxEvents();
+      var screenshot = Path.of("target", "visual-regression", "login-dialog.png");
+      Files.createDirectories(screenshot.getParent());
+      Node dialogPane = robot.lookup(".dialog-pane").query();
+      robot
+          .robotContext()
+          .getCaptureSupport()
+          .saveImage(robot.capture((Node) dialogPane).getImage(), screenshot);
+      assertTrue(Files.size(screenshot) > 0);
+      assertTrue(
+          ((Parent) dialogPane)
+              .getStylesheets()
+              .contains(TucumaTheme.class.getResource("tucuma-classic.css").toExternalForm()));
 
       robot.interact(
           () -> {

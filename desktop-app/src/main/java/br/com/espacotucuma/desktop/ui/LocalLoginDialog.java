@@ -26,6 +26,7 @@ final class LocalLoginDialog {
     if (owner != null) dialog.initOwner(owner);
     ButtonType loginButton = new ButtonType("Entrar", ButtonBar.ButtonData.OK_DONE);
     dialog.getDialogPane().getButtonTypes().addAll(loginButton, ButtonType.CANCEL);
+    TucumaTheme.apply(dialog.getDialogPane());
     TextField login = new TextField();
     PasswordField password = new PasswordField();
     Label message = new Label("A autenticação funciona sem internet.");

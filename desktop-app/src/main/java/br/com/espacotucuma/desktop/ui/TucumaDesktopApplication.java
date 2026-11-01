@@ -25,6 +25,7 @@ public final class TucumaDesktopApplication extends Application {
       alert.setTitle("Tucumã — Gestão");
       alert.setHeaderText("Não foi possível abrir os dados locais.");
       alert.setContentText(startupErrorMessage(startupFailure));
+      TucumaTheme.apply(alert.getDialogPane());
       alert.showAndWait();
       Platform.exit();
       return;
@@ -64,8 +65,11 @@ public final class TucumaDesktopApplication extends Application {
     toolbar.setPadding(new Insets(8));
     BorderPane root = new BorderPane(status);
     root.setTop(toolbar);
+    TucumaTheme.apply(root);
     stage.setTitle("Tucumã — Gestão");
-    stage.setScene(new Scene(root, 900, 600));
+    stage.setScene(new Scene(root, 1180, 720));
+    stage.setMinWidth(1024);
+    stage.setMinHeight(680);
     stage.show();
 
     if (smokeTest) {
