@@ -13,6 +13,7 @@ import br.com.espacotucuma.desktop.application.identity.LogoutUseCase;
 import br.com.espacotucuma.desktop.application.identity.SessionContext;
 import br.com.espacotucuma.desktop.infrastructure.security.Pbkdf2PasswordHasher;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.LocalDatabaseSession;
+import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteAuditRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteClientRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteInitialSetupRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteLocalCredentialRepository;
@@ -90,6 +91,7 @@ public final class DesktopRuntime implements AutoCloseable {
       AuthorizationService authorization = new AuthorizationService(sessions);
       SqliteLocalCredentialRepository credentials =
           new SqliteLocalCredentialRepository(database.connection(), unitOfWork);
+      SqliteAuditRepository audit = new SqliteAuditRepository(database.connection(), unitOfWork);
       UUID stationId = stationId(database.databaseFile());
       RegisterClientUseCase registerClient =
           new RegisterClientUseCase(
@@ -97,12 +99,15 @@ public final class DesktopRuntime implements AutoCloseable {
               new SqliteClientRepository(database.connection(), unitOfWork),
               new SqliteOutboxRepository(database.connection(), unitOfWork),
               stationId,
-              authorization);
+              authorization,
+              audit);
       CreateFirstAdministratorUseCase createFirstAdministrator =
           new CreateFirstAdministratorUseCase(
               unitOfWork,
               new SqliteInitialSetupRepository(database.connection(), unitOfWork),
-              new Pbkdf2PasswordHasher());
+              new Pbkdf2PasswordHasher(),
+              audit,
+              stationId);
       ChangeLocalPasswordUseCase changeLocalPassword =
           new ChangeLocalPasswordUseCase(unitOfWork, credentials, new Pbkdf2PasswordHasher());
       LoginUseCase login =
@@ -116,9 +121,9 @@ public final class DesktopRuntime implements AutoCloseable {
       SqliteUserAdministrationRepository userRepository =
           new SqliteUserAdministrationRepository(database.connection(), unitOfWork);
       DeactivateUserUseCase deactivateUser =
-          new DeactivateUserUseCase(unitOfWork, userRepository, authorization, sessions);
+          new DeactivateUserUseCase(unitOfWork, userRepository, authorization, audit, stationId);
       ChangeUserRoleUseCase changeUserRole =
-          new ChangeUserRoleUseCase(unitOfWork, userRepository, authorization, sessions);
+          new ChangeUserRoleUseCase(unitOfWork, userRepository, authorization, audit, stationId);
       LOGGER.info(() -> "Aplicação iniciada com perfil " + environment.profile().directoryName());
       return new DesktopRuntime(
           database,

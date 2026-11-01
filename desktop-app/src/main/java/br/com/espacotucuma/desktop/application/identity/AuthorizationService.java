@@ -18,9 +18,14 @@ public final class AuthorizationService {
   }
 
   public void require(Permission permission) {
+    requireUser(permission);
+  }
+
+  public AuthenticatedUser requireUser(Permission permission) {
     if (!isAllowed(permission)) {
       throw new AuthorizationException("A sessão atual não tem permissão para esta operação.");
     }
+    return sessions.current().orElseThrow().user();
   }
 
   private boolean allowed(UserRole role, Permission permission) {

@@ -9,6 +9,7 @@ import br.com.espacotucuma.desktop.application.identity.LoginUseCase;
 import br.com.espacotucuma.desktop.application.identity.SessionContext;
 import br.com.espacotucuma.desktop.infrastructure.security.Pbkdf2PasswordHasher;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.LocalDatabaseSession;
+import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteAuditRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteInitialSetupRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteLocalCredentialRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteLoginAttemptRepository;
@@ -52,7 +53,9 @@ class LocalLoginDialogTest {
       new CreateFirstAdministratorUseCase(
               unitOfWork,
               new SqliteInitialSetupRepository(database.connection(), unitOfWork),
-              hasher)
+              hasher,
+              new SqliteAuditRepository(database.connection(), unitOfWork),
+              java.util.UUID.randomUUID())
           .create(
               new InitialAdministratorSetup(
                   "Espaço Tucumã", "Admin Teste", "admin", "SenhaOfflineForte2026!".toCharArray()));

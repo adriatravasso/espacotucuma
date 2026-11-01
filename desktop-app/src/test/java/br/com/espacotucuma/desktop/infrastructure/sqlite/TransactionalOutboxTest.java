@@ -9,10 +9,13 @@ import br.com.espacotucuma.desktop.application.client.Client;
 import br.com.espacotucuma.desktop.application.client.RegisterClientUseCase;
 import br.com.espacotucuma.desktop.application.identity.AuthenticatedUser;
 import br.com.espacotucuma.desktop.application.identity.AuthorizationService;
+import br.com.espacotucuma.desktop.application.identity.CreateFirstAdministratorUseCase;
+import br.com.espacotucuma.desktop.application.identity.InitialAdministratorSetup;
 import br.com.espacotucuma.desktop.application.identity.SessionContext;
 import br.com.espacotucuma.desktop.application.identity.UserRole;
 import br.com.espacotucuma.desktop.application.outbox.PendingOperation;
 import br.com.espacotucuma.desktop.application.outbox.ServerConfirmation;
+import br.com.espacotucuma.desktop.infrastructure.security.Pbkdf2PasswordHasher;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.ResultSet;
@@ -36,7 +39,7 @@ class TransactionalOutboxTest {
       SqliteClientRepository clients =
           new SqliteClientRepository(database.connection(), unitOfWork);
       SqliteOutboxRepository outbox = new SqliteOutboxRepository(database.connection(), unitOfWork);
-      RegisterClientUseCase useCase = registerClientUseCase(unitOfWork, clients, outbox);
+      RegisterClientUseCase useCase = registerClientUseCase(unitOfWork, clients, outbox, database);
 
       Client saved = useCase.register("  Maria Oliveira  ", "92999990000");
 
@@ -53,12 +56,29 @@ class TransactionalOutboxTest {
       assertEquals(STATION_ID, event.originStationId());
       assertEquals(0, event.attempts());
       assertEquals(1, scalarInt(database.connection(), "SELECT count(*) FROM operacao_pendente"));
+      assertEquals(2, scalarInt(database.connection(), "SELECT count(*) FROM evento_auditoria"));
       assertEquals(
           "PENDENTE", scalarString(database.connection(), "SELECT estado FROM operacao_pendente"));
+      assertEquals(
+          "CLIENTE_CRIADO",
+          scalarString(
+              database.connection(),
+              "SELECT acao FROM evento_auditoria WHERE acao = 'CLIENTE_CRIADO'"));
+      assertEquals(
+          STATION_ID.toString(),
+          scalarString(
+              database.connection(),
+              "SELECT origem_estacao_id FROM evento_auditoria WHERE acao = 'CLIENTE_CRIADO'"));
+      assertEquals(
+          "{}",
+          scalarString(
+              database.connection(),
+              "SELECT detalhes_json FROM evento_auditoria WHERE acao = 'CLIENTE_CRIADO'"));
     }
     try (LocalDatabaseSession reopened = LocalDatabaseSession.open(temp.resolve("local.sqlite"))) {
       assertEquals(1, scalarInt(reopened.connection(), "SELECT count(*) FROM cliente"));
       assertEquals(1, scalarInt(reopened.connection(), "SELECT count(*) FROM operacao_pendente"));
+      assertEquals(2, scalarInt(reopened.connection(), "SELECT count(*) FROM evento_auditoria"));
       assertEquals(0, scalarInt(reopened.connection(), "SELECT tentativas FROM operacao_pendente"));
     }
   }
@@ -71,7 +91,7 @@ class TransactionalOutboxTest {
       SqliteClientRepository clients =
           new SqliteClientRepository(database.connection(), unitOfWork);
       SqliteOutboxRepository outbox = new SqliteOutboxRepository(database.connection(), unitOfWork);
-      RegisterClientUseCase useCase = registerClientUseCase(unitOfWork, clients, outbox);
+      RegisterClientUseCase useCase = registerClientUseCase(unitOfWork, clients, outbox, database);
       try (Statement statement = database.connection().createStatement()) {
         statement.execute(
             "CREATE TRIGGER reject_outbox BEFORE INSERT ON operacao_pendente "
@@ -87,6 +107,29 @@ class TransactionalOutboxTest {
   }
 
   @Test
+  void auditInsertFailureRollsBackClientAndOutboxTogether(@TempDir Path temp) throws Exception {
+    try (LocalDatabaseSession database =
+        LocalDatabaseSession.open(temp.resolve("audit-rollback.sqlite"))) {
+      SqliteUnitOfWork unitOfWork = new SqliteUnitOfWork(database.connection());
+      SqliteClientRepository clients =
+          new SqliteClientRepository(database.connection(), unitOfWork);
+      SqliteOutboxRepository outbox = new SqliteOutboxRepository(database.connection(), unitOfWork);
+      RegisterClientUseCase useCase = registerClientUseCase(unitOfWork, clients, outbox, database);
+      try (Statement statement = database.connection().createStatement()) {
+        statement.execute(
+            "CREATE TRIGGER reject_audit BEFORE INSERT ON evento_auditoria "
+                + "BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END");
+      }
+
+      assertThrows(RuntimeException.class, () -> useCase.register("Cliente fictícia", null));
+      assertEquals(0, scalarInt(database.connection(), "SELECT count(*) FROM cliente"));
+      assertEquals(0, scalarInt(database.connection(), "SELECT count(*) FROM operacao_pendente"));
+      assertEquals(1, scalarInt(database.connection(), "SELECT count(*) FROM evento_auditoria"));
+      assertTrue(database.connection().getAutoCommit());
+    }
+  }
+
+  @Test
   void attemptAndSynchronizationStateChangeOnlyWhenExplicitlyRecordedWithServerConfirmation(
       @TempDir Path temp) throws Exception {
     try (LocalDatabaseSession database =
@@ -95,7 +138,7 @@ class TransactionalOutboxTest {
       SqliteClientRepository clients =
           new SqliteClientRepository(database.connection(), unitOfWork);
       SqliteOutboxRepository outbox = new SqliteOutboxRepository(database.connection(), unitOfWork);
-      RegisterClientUseCase useCase = registerClientUseCase(unitOfWork, clients, outbox);
+      RegisterClientUseCase useCase = registerClientUseCase(unitOfWork, clients, outbox, database);
       Client saved = useCase.register("Ana Souza", null);
       PendingOperation pending = outbox.findPending(1).getFirst();
 
@@ -147,13 +190,49 @@ class TransactionalOutboxTest {
   }
 
   private RegisterClientUseCase registerClientUseCase(
-      SqliteUnitOfWork unitOfWork, SqliteClientRepository clients, SqliteOutboxRepository outbox) {
+      SqliteUnitOfWork unitOfWork,
+      SqliteClientRepository clients,
+      SqliteOutboxRepository outbox,
+      LocalDatabaseSession database) {
     SessionContext sessions = new SessionContext();
-    sessions.establish(
-        new AuthenticatedUser(
-            UUID.randomUUID(), "Admin de teste", "admin", UserRole.ADMINISTRADOR));
+    Pbkdf2PasswordHasher hasher = new Pbkdf2PasswordHasher();
+    new CreateFirstAdministratorUseCase(
+            unitOfWork,
+            new SqliteInitialSetupRepository(database.connection(), unitOfWork),
+            hasher,
+            new SqliteAuditRepository(database.connection(), unitOfWork),
+            STATION_ID)
+        .create(
+            new InitialAdministratorSetup(
+                "Espaço Tucumã",
+                "Admin de teste",
+                "admin",
+                "SenhaTesteOffline2026!".toCharArray()));
+    try (var statement =
+        database
+            .connection()
+            .prepareStatement(
+                "SELECT id, nome, login FROM usuario WHERE perfil = 'ADMINISTRADOR'")) {
+      try (var result = statement.executeQuery()) {
+        if (!result.next()) throw new IllegalStateException("Conta de teste não criada.");
+        UUID userId = UUID.fromString(result.getString("id"));
+        sessions.establish(
+            new AuthenticatedUser(
+                userId,
+                result.getString("nome"),
+                result.getString("login"),
+                UserRole.ADMINISTRADOR));
+      }
+    } catch (Exception failure) {
+      throw new IllegalStateException(failure);
+    }
     return new RegisterClientUseCase(
-        unitOfWork, clients, outbox, STATION_ID, new AuthorizationService(sessions));
+        unitOfWork,
+        clients,
+        outbox,
+        STATION_ID,
+        new AuthorizationService(sessions),
+        new SqliteAuditRepository(database.connection(), unitOfWork));
   }
 
   private String scalarString(Connection connection, String sql) throws Exception {
