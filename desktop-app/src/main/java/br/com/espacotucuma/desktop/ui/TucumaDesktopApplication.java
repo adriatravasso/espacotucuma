@@ -1,6 +1,7 @@
 package br.com.espacotucuma.desktop.ui;
 
 import br.com.espacotucuma.desktop.DesktopRuntime;
+import br.com.espacotucuma.desktop.application.identity.InitialAdministratorSetup;
 import javafx.application.Application;
 import javafx.application.Platform;
 import javafx.scene.Parent;
@@ -28,17 +29,34 @@ public final class TucumaDesktopApplication extends Application {
       return;
     }
 
-    if (runtime.createFirstAdministrator().isSetupRequired()
-        && !InitialAdministratorDialog.showAndCreate(stage, runtime.createFirstAdministrator())) {
-      Platform.exit();
-      return;
-    }
-
     boolean smokeTest =
         getParameters().getRaw().contains("--smoke-test") && runtime.isTestProfile();
+    if (runtime.createFirstAdministrator().isSetupRequired()) {
+      if (smokeTest) {
+        runtime
+            .createFirstAdministrator()
+            .create(
+                new InitialAdministratorSetup(
+                    "Espaço Tucumã",
+                    "Admin de teste",
+                    "admin",
+                    "SenhaOfflineForte2026!".toCharArray()));
+      } else if (!InitialAdministratorDialog.showAndCreate(
+          stage, runtime.createFirstAdministrator())) {
+        Platform.exit();
+        return;
+      }
+    }
+
     if (smokeTest) {
       if (runtime.login().login("admin", "SenhaOfflineForte2026!".toCharArray()).isEmpty()) {
         throw new IllegalStateException("A credencial sintética do smoke test não foi aceita.");
+      }
+      if (runtime
+          .clients()
+          .findPotentialDuplicates("Cliente de validação do pacote", "92955555555", null)
+          .isEmpty()) {
+        runtime.registerClient().register("Cliente de validação do pacote", "92955555555");
       }
     } else if (LocalLoginDialog.show(stage, runtime.login()).isEmpty()) {
       Platform.exit();

@@ -45,3 +45,34 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_ENABLE_COMMENTS: 'false'
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: 'false'
+
+  windows-installer:
+    name: Build and exercise Windows installer
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Set up Java 21
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Ensure WiX Toolset is available
+        shell: pwsh
+        run: |
+          if (-not (Get-Command candle.exe -ErrorAction SilentlyContinue)) {
+            choco install wixtoolset --yes --no-progress
+          }
+          if (-not (Get-Command candle.exe -ErrorAction SilentlyContinue) -or
+              -not (Get-Command light.exe -ErrorAction SilentlyContinue)) {
+            throw 'WiX Toolset executables are not available in PATH.'
+          }
+
+      - name: Build, install, upgrade, and uninstall package offline
+        shell: pwsh
+        run: .\scripts\test-windows-installer.ps1

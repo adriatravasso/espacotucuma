@@ -47,7 +47,7 @@ class DesktopSmokeTest {
                 "-Dtucuma.data-root=" + tempDirectory,
                 "-cp",
                 testClasspath,
-                DesktopSmokeLauncher.class.getName(),
+                DesktopLauncher.class.getName(),
                 "--smoke-test")
             .redirectErrorStream(true)
             .redirectOutput(outputFile.toFile())
@@ -70,6 +70,14 @@ class DesktopSmokeTest {
         var result = statement.executeQuery("PRAGMA quick_check")) {
       assertTrue(result.next());
       assertEquals("ok", result.getString(1));
+    }
+    try (var connection = DriverManager.getConnection("jdbc:sqlite:" + databaseFile);
+        var statement = connection.createStatement();
+        var result =
+            statement.executeQuery(
+                "SELECT COUNT(*) FROM cliente WHERE nome = 'Cliente de validação do pacote'")) {
+      assertTrue(result.next());
+      assertEquals(1, result.getInt(1), "Smoke startup should persist its synthetic client");
     }
   }
 
