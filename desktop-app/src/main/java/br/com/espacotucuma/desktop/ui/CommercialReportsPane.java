@@ -8,11 +8,17 @@ import br.com.espacotucuma.desktop.application.reports.CommercialReportRow;
 import br.com.espacotucuma.desktop.application.reports.CommercialReportSummary;
 import br.com.espacotucuma.desktop.application.reports.CommercialReportType;
 import br.com.espacotucuma.desktop.application.reports.QueryCommercialReportsUseCase;
+import br.com.espacotucuma.desktop.infrastructure.reporting.LocalArtifactWriter;
+import java.io.IOException;
 import java.math.BigDecimal;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
@@ -31,6 +37,7 @@ import javafx.scene.control.TextField;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
+import javafx.stage.FileChooser;
 
 /** Local, paginated commercial reports backed by SQLite. */
 public final class CommercialReportsPane extends BorderPane {
@@ -59,6 +66,8 @@ public final class CommercialReportsPane extends BorderPane {
   private final Button previousButton = new Button("Anterior");
   private final Button nextButton = new Button("Próxima");
   private final Button printButton = new Button("Imprimir");
+  private final Button csvButton = new Button("Exportar CSV");
+  private final Button pdfButton = new Button("Exportar PDF");
   private final Label revenue = new Label();
   private final Label received = new Label();
   private final Label pending = new Label();
@@ -88,6 +97,8 @@ public final class CommercialReportsPane extends BorderPane {
     previousButton.setId("commercialReportPrevious");
     nextButton.setId("commercialReportNext");
     printButton.setId("commercialReportPrint");
+    csvButton.setId("commercialReportCsv");
+    pdfButton.setId("commercialReportPdf");
     issuer.setId("commercialReportIssuer");
     table.setId("commercialReportTable");
     message.setId("commercialReportMessage");
@@ -141,6 +152,8 @@ public final class CommercialReportsPane extends BorderPane {
           }
         });
     printButton.setOnAction(event -> printReport());
+    csvButton.setOnAction(event -> exportReport(false));
+    pdfButton.setOnAction(event -> exportReport(true));
     HBox periodFilters =
         new HBox(
             8,
@@ -158,7 +171,9 @@ public final class CommercialReportsPane extends BorderPane {
             professionalFilter,
             new Label("Serviço"),
             serviceFilter,
-            printButton);
+            printButton,
+            csvButton,
+            pdfButton);
     periodFilters.setPadding(new Insets(8));
     detailFilters.setPadding(new Insets(0, 8, 8, 8));
     HBox totals = new HBox(18, revenue, received, pending, expenses);
@@ -179,10 +194,14 @@ public final class CommercialReportsPane extends BorderPane {
       clearResults();
       issuer.setText("");
       printButton.setDisable(true);
+      csvButton.setDisable(true);
+      pdfButton.setDisable(true);
       message.setText("A sessão atual não tem permissão para consultar relatórios.");
       return;
     }
     printButton.setDisable(false);
+    csvButton.setDisable(false);
+    pdfButton.setDisable(false);
     clearResults();
     final CommercialReportPeriod period;
     try {
@@ -331,6 +350,188 @@ public final class CommercialReportsPane extends BorderPane {
       if (job.printPage(this)) job.endJob();
       else message.setText("Não foi possível imprimir o relatório.");
     }
+  }
+
+  private void exportReport(boolean pdf) {
+    if (getScene() == null || !authorization.isAllowed(Permission.REPORTS_VIEW)) return;
+    final CommercialReportPeriod period;
+    try {
+      period =
+          new CommercialReportPeriod(
+              LocalDate.parse(from.getText().strip()), LocalDate.parse(through.getText().strip()));
+    } catch (RuntimeException invalidPeriod) {
+      message.setText("Informe datas válidas antes de exportar.");
+      return;
+    }
+    CommercialReportType selectedType = reportType.getValue();
+    String selectedProfessional = professionalFilter.getText().strip();
+    String selectedService = serviceFilter.getText().strip();
+    String extension = pdf ? "pdf" : "csv";
+    String baseName =
+        "tucuma-"
+            + selectedType.name().toLowerCase(java.util.Locale.ROOT)
+            + "-"
+            + period.from()
+            + "-"
+            + period.through()
+            + "."
+            + extension;
+    FileChooser chooser = new FileChooser();
+    chooser.setTitle(pdf ? "Exportar relatório em PDF" : "Exportar relatório em CSV");
+    chooser.setInitialFileName(baseName);
+    chooser
+        .getExtensionFilters()
+        .add(
+            new FileChooser.ExtensionFilter(
+                extension.toUpperCase() + " (*." + extension + ")", "*." + extension));
+    java.io.File selectedFile = chooser.showSaveDialog(getScene().getWindow());
+    if (selectedFile == null) return;
+    Path destination = selectedFile.toPath();
+    String user = authorization.requireUser(Permission.REPORTS_VIEW).name();
+    String generatedAt =
+        DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss")
+            .withZone(BUSINESS_ZONE)
+            .format(Instant.now());
+    csvButton.setDisable(true);
+    pdfButton.setDisable(true);
+    message.setText("Gerando arquivo com os dados locais…");
+    queryExecutor.execute(
+        () -> {
+          try {
+            List<CommercialReportRow> rows = new ArrayList<>();
+            int currentPage = 0;
+            long total;
+            do {
+              CommercialReportPage result =
+                  reports.find(
+                      selectedType,
+                      period,
+                      currentPage,
+                      200,
+                      selectedProfessional,
+                      selectedService);
+              rows.addAll(result.rows());
+              total = result.totalRows();
+              currentPage++;
+            } while ((long) currentPage * 200 < total);
+            if (pdf) {
+              LocalArtifactWriter.writePdf(
+                  destination,
+                  "Espaço Tucumã — " + selectedType.label(),
+                  reportDocumentLines(
+                      selectedType,
+                      period,
+                      selectedProfessional,
+                      selectedService,
+                      generatedAt,
+                      user,
+                      rows));
+            } else {
+              LocalArtifactWriter.writeCsv(
+                  destination,
+                  reportCsvRows(
+                      selectedType,
+                      period,
+                      selectedProfessional,
+                      selectedService,
+                      generatedAt,
+                      user,
+                      rows));
+            }
+            Platform.runLater(() -> message.setText("Arquivo salvo: " + destination.getFileName()));
+          } catch (IOException | RuntimeException failure) {
+            Platform.runLater(
+                () ->
+                    message.setText(
+                        failure.getMessage() == null
+                            ? "Não foi possível gerar o arquivo. Os dados locais foram preservados."
+                            : "Falha ao exportar: " + failure.getMessage()));
+          } finally {
+            Platform.runLater(
+                () -> {
+                  csvButton.setDisable(!authorization.isAllowed(Permission.REPORTS_VIEW));
+                  pdfButton.setDisable(!authorization.isAllowed(Permission.REPORTS_VIEW));
+                });
+          }
+        });
+  }
+
+  private List<List<String>> reportCsvRows(
+      CommercialReportType type,
+      CommercialReportPeriod period,
+      String professional,
+      String service,
+      String generatedAt,
+      String user,
+      List<CommercialReportRow> rows) {
+    List<List<String>> result = new ArrayList<>();
+    result.add(List.of("Relatório", type.label()));
+    result.add(List.of("Período", period.from().toString(), period.through().toString()));
+    result.add(List.of("Profissional", professional.isEmpty() ? "Todos" : professional));
+    result.add(List.of("Serviço", service.isEmpty() ? "Todos" : service));
+    result.add(List.of("Emitido por", user));
+    result.add(List.of("Gerado em", generatedAt));
+    result.add(
+        List.of(
+            "Data/hora",
+            "Descrição",
+            "Detalhes",
+            "Situação",
+            "Quantidade / esperado",
+            "Valor (R$)"));
+    for (CommercialReportRow row : rows) {
+      result.add(
+          List.of(
+              row.occurredAt() == null ? "" : DISPLAY_DATE.format(row.occurredAt()),
+              Objects.toString(row.title(), ""),
+              Objects.toString(row.detail(), ""),
+              Objects.toString(row.status(), ""),
+              exportQuantity(type, row),
+              BigDecimal.valueOf(row.amountCents(), 2).toPlainString().replace('.', ',')));
+    }
+    return result;
+  }
+
+  private List<String> reportDocumentLines(
+      CommercialReportType type,
+      CommercialReportPeriod period,
+      String professional,
+      String service,
+      String generatedAt,
+      String user,
+      List<CommercialReportRow> rows) {
+    List<String> result = new ArrayList<>();
+    result.add("Período: " + period.from() + " a " + period.through());
+    result.add("Profissional: " + (professional.isEmpty() ? "Todos" : professional));
+    result.add("Serviço: " + (service.isEmpty() ? "Todos" : service));
+    result.add("Emitido por: " + user + " em " + generatedAt + " (America/Manaus)");
+    result.add("");
+    result.add("Data/hora | Descrição | Detalhes | Situação | Qtde./esperado | Valor (R$)");
+    for (CommercialReportRow row : rows) {
+      result.add(
+          (row.occurredAt() == null ? "—" : DISPLAY_DATE.format(row.occurredAt()))
+              + " | "
+              + Objects.toString(row.title(), "")
+              + " | "
+              + Objects.toString(row.detail(), "")
+              + " | "
+              + Objects.toString(row.status(), "")
+              + " | "
+              + exportQuantity(type, row)
+              + " | "
+              + money(row.amountCents()));
+    }
+    return result;
+  }
+
+  private static String exportQuantity(CommercialReportType type, CommercialReportRow row) {
+    if (type == CommercialReportType.CASH_CLOSINGS) return money(row.quantity());
+    if (type == CommercialReportType.STOCK_POSITION
+        || type == CommercialReportType.LOW_STOCK
+        || type == CommercialReportType.STOCK_CONSUMPTION) {
+      return BigDecimal.valueOf(row.quantity(), 3).stripTrailingZeros().toPlainString();
+    }
+    return Long.toString(row.quantity());
   }
 
   private static TableColumn<CommercialReportRow, String> column(

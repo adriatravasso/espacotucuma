@@ -231,6 +231,10 @@ class AppointmentRegistryPaneTest {
                   .queryLabeled()
                   .getText()
                   .contains("Desconto autorizado"));
+      WaitForAsyncUtils.waitFor(
+          8,
+          TimeUnit.SECONDS,
+          () -> robot.lookup("#attendanceTotal").queryLabeled().getText().contains("45,00"));
       assertTrue(robot.lookup("#attendanceTotal").queryLabeled().getText().contains("45,00"));
       robot.interact(
           () ->
