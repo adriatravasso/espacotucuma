@@ -392,7 +392,14 @@ public final class DesktopRuntime implements AutoCloseable {
               unitOfWork, remoteConflicts, authorization, audit, stationId);
       OutboxRepository outbox = new SqliteOutboxRepository(database.connection(), unitOfWork);
       ManualSynchronizationPort manualSynchronization =
-          createManualSynchronization(outbox, unitOfWork, database.connection());
+          createManualSynchronization(
+              outbox,
+              unitOfWork,
+              database.connection(),
+              authorization,
+              audit,
+              protectionStatus,
+              stationId);
       DeactivateUserUseCase deactivateUser =
           new DeactivateUserUseCase(unitOfWork, userRepository, authorization, audit, stationId);
       ChangeUserRoleUseCase changeUserRole =
@@ -586,7 +593,13 @@ public final class DesktopRuntime implements AutoCloseable {
   }
 
   private static ManualSynchronizationPort createManualSynchronization(
-      OutboxRepository outbox, SqliteUnitOfWork unitOfWork, java.sql.Connection connection) {
+      OutboxRepository outbox,
+      SqliteUnitOfWork unitOfWork,
+      java.sql.Connection connection,
+      AuthorizationService authorization,
+      SqliteAuditRepository audit,
+      SqliteProtectionStatusRepository protectionStatus,
+      UUID stationId) {
     String baseUrl = System.getenv("TUCUMA_SYNC_BASE_URL");
     String deviceId = System.getenv("TUCUMA_SYNC_DEVICE_ID");
     if (baseUrl == null || baseUrl.isBlank() || deviceId == null || deviceId.isBlank()) {
@@ -608,7 +621,11 @@ public final class DesktopRuntime implements AutoCloseable {
         (DeviceCredentialStore) new WindowsCredentialStore(),
         outbox,
         remoteChanges,
-        unitOfWork);
+        unitOfWork,
+        authorization,
+        audit,
+        protectionStatus,
+        stationId);
   }
 
   public br.com.espacotucuma.desktop.application.ProtectionStatus protectionStatus() {

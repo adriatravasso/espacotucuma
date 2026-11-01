@@ -2,6 +2,7 @@ package br.com.espacotucuma.desktop.ui;
 
 import br.com.espacotucuma.desktop.application.ProtectionStatus;
 import br.com.espacotucuma.desktop.application.port.synchronization.ManualSynchronizationPort;
+import br.com.espacotucuma.desktop.application.port.synchronization.SynchronizationProgress;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -52,6 +53,7 @@ final class TucumaMainShell {
   private final AtomicReference<Thread> synchronizationWorker = new AtomicReference<>();
   private Button synchronizationButton;
   private MenuItem synchronizationMenuItem;
+  private Label synchronizationProgress;
   private Runnable logoutAction = () -> {};
   private String activeModule = "Início";
 
@@ -339,6 +341,8 @@ final class TucumaMainShell {
         new javafx.scene.control.Tooltip("Envia alterações pendentes somente quando acionado."));
     synchronizationButton.setAccessibleHelp("Inicia a sincronização manual.");
     synchronizationButton.setOnAction(event -> startSynchronization());
+    synchronizationProgress = new Label("Sincronização manual");
+    synchronizationProgress.setId("syncProgress");
 
     ToolBar toolBar =
         new ToolBar(
@@ -348,6 +352,7 @@ final class TucumaMainShell {
             disabledButton("Cancelar", "command-cancel"),
             disabledButton("Imprimir", "command-print"),
             synchronizationButton,
+            synchronizationProgress,
             quickAgenda,
             logout);
     toolBar.setId("commandToolbar");
@@ -373,36 +378,63 @@ final class TucumaMainShell {
     }
     synchronizationButton.setText("Cancelar");
     synchronizationMenuItem.setText("Cancelar sincronização");
+    synchronizationProgress.setText("Preparando sincronização manual...");
+    AtomicReference<SynchronizationProgress> outcome =
+        new AtomicReference<>(
+            SynchronizationProgress.of(SynchronizationProgress.State.VERIFYING_ACCESS));
     Task<Void> task =
         new Task<>() {
           @Override
           protected Void call() {
-            manualSynchronization.synchronizeNow();
+            manualSynchronization.synchronizeNow(
+                progress -> {
+                  outcome.set(progress);
+                  updateMessage(progress.detail());
+                });
             return null;
           }
         };
+    task.messageProperty()
+        .addListener(
+            (observable, previous, current) ->
+                synchronizationProgress.setText(current == null ? "" : current));
     task.setOnSucceeded(
         event -> {
           finishSynchronization();
           refreshStatus();
-          Alert alert = new Alert(Alert.AlertType.INFORMATION, "Sincronização concluída.");
+          SynchronizationProgress result = outcome.get();
+          Alert alert =
+              new Alert(
+                  Alert.AlertType.INFORMATION,
+                  result.detail()
+                      + "\nEnviadas: "
+                      + result.sentOperations()
+                      + " | Recebidas: "
+                      + result.receivedChanges()
+                      + " | Conflitos: "
+                      + result.conflicts()
+                      + " | Checkpoint: "
+                      + result.checkpoint());
           alert.setTitle("Espaço Tucumã");
-          alert.setHeaderText("Dados sincronizados");
+          alert.setHeaderText(result.state().label());
           TucumaTheme.apply(alert.getDialogPane());
           alert.show();
         });
     task.setOnFailed(
         event -> {
           finishSynchronization();
+          refreshStatus();
           Throwable failure = task.getException();
+          SynchronizationProgress result = outcome.get();
+          synchronizationProgress.setText(result.detail());
           Alert alert =
               new Alert(
                   Alert.AlertType.ERROR,
                   failure == null || failure.getMessage() == null
-                      ? "A sincronização falhou. As alterações continuam pendentes."
-                      : failure.getMessage());
+                      ? result.detail()
+                      : result.detail() + "\n" + failure.getMessage());
           alert.setTitle("Espaço Tucumã");
-          alert.setHeaderText("Sincronização não concluída");
+          alert.setHeaderText(result.state().label());
           TucumaTheme.apply(alert.getDialogPane());
           alert.show();
         });

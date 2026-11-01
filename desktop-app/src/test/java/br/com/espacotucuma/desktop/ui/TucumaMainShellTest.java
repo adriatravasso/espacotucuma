@@ -143,6 +143,7 @@ class TucumaMainShellTest {
     assertEquals(0, synchronizationCalls.get());
     robot.interact(() -> robot.lookup("#command-sync").queryButton().fire());
     assertTrue(synchronizationStarted.await(5, TimeUnit.SECONDS));
+    assertTrue(robot.lookup("#syncProgress").queryLabeled().getText().contains("Verificando"));
     try {
       robot.interact(
           () ->

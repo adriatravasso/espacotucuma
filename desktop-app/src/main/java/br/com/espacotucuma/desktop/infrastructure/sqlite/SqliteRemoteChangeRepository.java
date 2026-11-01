@@ -56,6 +56,23 @@ public final class SqliteRemoteChangeRepository implements RemoteChangeRepositor
   }
 
   @Override
+  public int unresolvedConflictCount() {
+    return unitOfWork.read(
+        () -> {
+          try (PreparedStatement statement =
+                  connection.prepareStatement(
+                      "SELECT COUNT(*) FROM alteracao_remota_recebida "
+                          + "WHERE estado_local = 'CONFLITO' AND estado_reconciliacao = 'ABERTO'");
+              ResultSet result = statement.executeQuery()) {
+            return result.next() ? result.getInt(1) : 0;
+          } catch (SQLException failure) {
+            throw new IllegalStateException(
+                "Não foi possível consultar conflitos pendentes.", failure);
+          }
+        });
+  }
+
+  @Override
   public void applyPage(long expectedCheckpoint, ChangesResponse page) {
     requireTransaction();
     Objects.requireNonNull(page, "page");
