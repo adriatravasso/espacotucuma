@@ -30,6 +30,7 @@ final class InitialAdministratorDialog {
 
     ButtonType createButton = new ButtonType("Criar administrador", ButtonBar.ButtonData.OK_DONE);
     dialog.getDialogPane().getButtonTypes().addAll(createButton, ButtonType.CANCEL);
+    TucumaTheme.apply(dialog.getDialogPane());
 
     TextField establishmentName = new TextField();
     TextField administratorName = new TextField();
