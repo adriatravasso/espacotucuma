@@ -171,6 +171,23 @@ public final class SqliteAppointmentRepository implements AppointmentRepository 
     }
   }
 
+  @Override
+  public void confirm(UUID id, LocalDateTime updatedAt) {
+    requireTransaction();
+    try (PreparedStatement statement =
+        connection.prepareStatement(
+            "UPDATE agendamento SET estado='CONFIRMADO',atualizado_em_utc=? "
+                + "WHERE id=? AND estado='AGENDADO'")) {
+      statement.setString(1, toUtc(updatedAt));
+      statement.setString(2, id.toString());
+      if (statement.executeUpdate() != 1) {
+        throw new IllegalStateException("Somente agendamentos pendentes podem ser confirmados.");
+      }
+    } catch (SQLException failure) {
+      throw new IllegalStateException("Não foi possível confirmar o agendamento local.", failure);
+    }
+  }
+
   private Appointment read(ResultSet row) throws SQLException {
     return new Appointment(
         UUID.fromString(row.getString("id")),

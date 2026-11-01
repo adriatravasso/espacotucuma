@@ -155,6 +155,30 @@ class AppointmentSchedulingSQLiteTest {
   }
 
   @Test
+  void confirmingAppointmentUpdatesStateAuditAndOutboxTogether(@TempDir Path temp)
+      throws Exception {
+    try (Fixture fixture = new Fixture(temp.resolve("schedule-confirm.sqlite"))) {
+      var created = fixture.createAt(9, 0);
+      var confirmed = fixture.maintain.confirm(created.id());
+      assertEquals(AppointmentStatus.CONFIRMADO, confirmed.status());
+      assertEquals(AppointmentStatus.CONFIRMADO, fixture.maintain.findById(created.id()).status());
+      assertEquals(
+          1,
+          fixture.scalar(
+              "SELECT COUNT(*) FROM evento_auditoria WHERE acao='AGENDAMENTO_CONFIRMADO'"));
+      assertEquals(
+          1,
+          fixture.scalar(
+              "SELECT COUNT(*) FROM operacao_pendente WHERE entidade='agendamento' AND tipo_operacao='AGENDAMENTO_CONFIRMADO'"));
+      assertThrows(IllegalStateException.class, () -> fixture.maintain.confirm(created.id()));
+      assertEquals(
+          1,
+          fixture.scalar(
+              "SELECT COUNT(*) FROM evento_auditoria WHERE acao='AGENDAMENTO_CONFIRMADO'"));
+    }
+  }
+
+  @Test
   void concurrentCreatesOnSingleConnectionCannotClaimSameSlot(@TempDir Path temp) throws Exception {
     try (Fixture fixture = new Fixture(temp.resolve("schedule-concurrent.sqlite"))) {
       CountDownLatch ready = new CountDownLatch(2);
