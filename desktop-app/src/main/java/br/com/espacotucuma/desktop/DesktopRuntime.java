@@ -445,7 +445,10 @@ public final class DesktopRuntime implements AutoCloseable {
           environment.profile()
               == br.com.espacotucuma.desktop.application.config.EnvironmentProfile.TEST);
     } catch (IOException | java.sql.SQLException | RuntimeException error) {
-      LOGGER.log(Level.SEVERE, "Falha ao preparar a aplicação desktop", error);
+      LOGGER.log(
+          Level.SEVERE,
+          "Falha ao preparar a aplicação desktop ({0}).",
+          error.getClass().getSimpleName());
       LOGGER.removeHandler(logHandler);
       logHandler.close();
       throw error;
