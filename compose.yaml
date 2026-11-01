@@ -1,0 +1,155 @@
+services:
+  postgres:
+    image: postgres:16.10-alpine
+    environment:
+      POSTGRES_DB: espacotucuma_sync
+      POSTGRES_USER: tucuma_demo
+      POSTGRES_PASSWORD: ${SYNC_DATABASE_PASSWORD:?Gere os segredos locais com scripts/configure-demo-environment.sh}
+    volumes:
+      - demo-postgres-data:/var/lib/postgresql/data
+    networks:
+      - demo-backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tucuma_demo -d espacotucuma_sync"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+
+  rustfs:
+    image: rustfs/rustfs:1.0.4
+    environment:
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:?Gere os segredos locais com scripts/configure-demo-environment.sh}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?Gere os segredos locais com scripts/configure-demo-environment.sh}
+      RUSTFS_SSE_S3_MASTER_KEY: ${RUSTFS_SSE_S3_MASTER_KEY:?Gere os segredos locais com scripts/configure-demo-environment.sh}
+      RUSTFS_ADDRESS: ":9000"
+      RUSTFS_CONSOLE_ADDRESS: ":9001"
+      RUSTFS_CONSOLE_ENABLE: "false"
+      RUSTFS_VOLUMES: /data
+      RUSTFS_OBS_LOGGER_LEVEL: warn
+    volumes:
+      - demo-object-data:/data
+    networks:
+      - demo-backend
+    restart: unless-stopped
+
+  rustfs-bootstrap:
+    image: tucuma/demo-tools:0.1.36
+    build:
+      context: .
+      dockerfile: deploy/demo-tools/Dockerfile
+    depends_on:
+      - rustfs
+    environment:
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:?Gere os segredos locais com scripts/configure-demo-environment.sh}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?Gere os segredos locais com scripts/configure-demo-environment.sh}
+      TUCUMA_BACKUP_ACCESS_KEY: ${TUCUMA_BACKUP_ACCESS_KEY:?Gere os segredos locais com scripts/configure-demo-environment.sh}
+      TUCUMA_BACKUP_SECRET_KEY: ${TUCUMA_BACKUP_SECRET_KEY:?Gere os segredos locais com scripts/configure-demo-environment.sh}
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        rc alias set local http://rustfs:9000 "$${RUSTFS_ACCESS_KEY}" "$${RUSTFS_SECRET_KEY}"
+        ready=false
+        for attempt in $$(seq 1 60); do
+          if rc ls local/ >/dev/null 2>&1; then ready=true; break; fi
+          sleep 2
+        done
+        test "$${ready}" = true
+        if ! rc ls local/tucuma-demo-backups >/dev/null 2>&1; then rc mb local/tucuma-demo-backups; fi
+        if ! rc ls local/tucuma-other-demo >/dev/null 2>&1; then rc mb local/tucuma-other-demo; fi
+        if ! rc admin policy info local tucuma-demo-backup >/dev/null 2>&1; then
+          rc admin policy create local tucuma-demo-backup /policies/backup.json
+        fi
+        if ! rc admin user info local "$${TUCUMA_BACKUP_ACCESS_KEY}" >/dev/null 2>&1; then
+          rc admin user add local "$${TUCUMA_BACKUP_ACCESS_KEY}" "$${TUCUMA_BACKUP_SECRET_KEY}"
+        fi
+        rc admin policy attach local tucuma-demo-backup --user "$${TUCUMA_BACKUP_ACCESS_KEY}"
+    volumes:
+      - ./deploy/object-storage/demo-backup-policy.json:/policies/backup.json:ro
+      - demo-cli-config:/home/demo/.config/rc
+    networks:
+      - demo-backend
+    restart: "no"
+
+  sync-service:
+    build:
+      context: .
+      dockerfile: sync-service/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rustfs-bootstrap:
+        condition: service_completed_successfully
+    environment:
+      SPRING_PROFILES_ACTIVE: demo
+      SERVER_PORT: 8080
+      SERVER_SSL_ENABLED: "false"
+      SYNC_DATABASE_URL: jdbc:postgresql://postgres:5432/espacotucuma_sync
+      SYNC_DATABASE_USERNAME: tucuma_demo
+      SYNC_DATABASE_PASSWORD: ${SYNC_DATABASE_PASSWORD:?Gere os segredos locais com scripts/configure-demo-environment.sh}
+      TUCUMA_SYNC_SECRET: ${TUCUMA_SYNC_SECRET:?Gere os segredos locais com scripts/configure-demo-environment.sh}
+      TUCUMA_BACKUP_BUCKET: tucuma-demo-backups
+      TUCUMA_BACKUP_REGION: us-east-1
+      TUCUMA_BACKUP_ENDPOINT: http://rustfs:9000
+      AWS_ACCESS_KEY_ID: ${TUCUMA_BACKUP_ACCESS_KEY:?Gere os segredos locais com scripts/configure-demo-environment.sh}
+      AWS_SECRET_ACCESS_KEY: ${TUCUMA_BACKUP_SECRET_KEY:?Gere os segredos locais com scripts/configure-demo-environment.sh}
+      TUCUMA_BACKUP_MAINTENANCE_CRON: "0 0 2 * * *"
+      TUCUMA_BACKUP_RETENTION_RECENT_COUNT: 30
+      TUCUMA_BACKUP_RETENTION_COVERAGE_DAYS: 90
+    ports:
+      - "127.0.0.1:${DEMO_SERVER_PORT:-18081}:8080"
+    networks:
+      - demo-backend
+      - demo-edge
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:8080/actuator/health/readiness"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 45s
+    restart: unless-stopped
+
+  anonymous-check:
+    image: tucuma/demo-tools:0.1.36
+    build:
+      context: .
+      dockerfile: deploy/demo-tools/Dockerfile
+    profiles: ["test"]
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        status=$$(curl --silent --output /dev/null --write-out "%{http_code}" "http://rustfs:9000/tucuma-demo-backups/$${DEMO_OBJECT_KEY}")
+        if [ "$${status}" != 403 ]; then echo "Objeto sem autenticação respondeu HTTP $${status}; esperado HTTP 403." >&2; exit 1; fi
+    environment:
+      DEMO_OBJECT_KEY: ${DEMO_OBJECT_KEY:-}
+    networks:
+      - demo-backend
+
+  backup-scope-check:
+    image: tucuma/demo-tools:0.1.36
+    build:
+      context: .
+      dockerfile: deploy/demo-tools/Dockerfile
+    profiles: ["test"]
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        rc alias set app http://rustfs:9000 "$${TUCUMA_BACKUP_ACCESS_KEY}" "$${TUCUMA_BACKUP_SECRET_KEY}"
+        rc ls app/tucuma-demo-backups >/dev/null
+        if rc ls app/tucuma-other-demo >/dev/null 2>&1; then exit 1; fi
+    environment:
+      TUCUMA_BACKUP_ACCESS_KEY: ${TUCUMA_BACKUP_ACCESS_KEY:?Gere os segredos locais com scripts/configure-demo-environment.sh}
+      TUCUMA_BACKUP_SECRET_KEY: ${TUCUMA_BACKUP_SECRET_KEY:?Gere os segredos locais com scripts/configure-demo-environment.sh}
+    networks:
+      - demo-backend
+
+networks:
+  demo-backend:
+    internal: true
+  demo-edge:
+
+volumes:
+  demo-postgres-data:
+  demo-object-data:
+  demo-cli-config:

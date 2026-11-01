@@ -30,6 +30,11 @@ jobs:
       - name: Compile all modules and run tests
         run: xvfb-run --auto-servernum ./mvnw --batch-mode --no-transfer-progress clean verify
 
+      - name: Exercise isolated PostgreSQL and private object-storage demo
+        env:
+          TUCUMA_DEMO_SKIP_MAVEN_BUILD: 'true'
+        run: ./scripts/test-demo-environment.sh
+
   secret-scan:
     name: Scan repository history for secrets
     runs-on: ubuntu-latest
