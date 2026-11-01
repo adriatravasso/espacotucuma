@@ -60,7 +60,8 @@ public final class TucumaDesktopApplication extends Application {
             runtime.authorization(),
             runtime.maintainAttendance(),
             runtime.prepaidPackages(),
-            runtime.registerPayment());
+            runtime.registerPayment(),
+            runtime.refundPayment());
     CashRegisterPane cashPane =
         new CashRegisterPane(runtime.manageCashTurn(), runtime.authorization());
     shell =

@@ -8,6 +8,7 @@ import br.com.espacotucuma.desktop.application.commission.MaintainCommissionRule
 import br.com.espacotucuma.desktop.application.config.DesktopEnvironment;
 import br.com.espacotucuma.desktop.application.config.DesktopPreferences;
 import br.com.espacotucuma.desktop.application.finance.ManageCashTurnUseCase;
+import br.com.espacotucuma.desktop.application.finance.RefundPaymentUseCase;
 import br.com.espacotucuma.desktop.application.finance.RegisterPaymentUseCase;
 import br.com.espacotucuma.desktop.application.identity.AuthorizationService;
 import br.com.espacotucuma.desktop.application.identity.ChangeLocalPasswordUseCase;
@@ -42,6 +43,7 @@ import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteInitialSetupRepos
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteLocalCredentialRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteOpenCashTurnRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteOutboxRepository;
+import br.com.espacotucuma.desktop.infrastructure.sqlite.SqlitePaymentRefundRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqlitePaymentRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqlitePrepaidPackageRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteProfessionalRepository;
@@ -78,6 +80,7 @@ public final class DesktopRuntime implements AutoCloseable {
   private final MaintainAppointmentUseCase maintainAppointment;
   private final MaintainAttendanceUseCase maintainAttendance;
   private final RegisterPaymentUseCase registerPayment;
+  private final RefundPaymentUseCase refundPayment;
   private final ManageCashTurnUseCase manageCashTurn;
   private final AuthorizationService authorization;
   private final CreateFirstAdministratorUseCase createFirstAdministrator;
@@ -109,6 +112,7 @@ public final class DesktopRuntime implements AutoCloseable {
       MaintainAppointmentUseCase maintainAppointment,
       MaintainAttendanceUseCase maintainAttendance,
       RegisterPaymentUseCase registerPayment,
+      RefundPaymentUseCase refundPayment,
       ManageCashTurnUseCase manageCashTurn,
       AuthorizationService authorization,
       CreateFirstAdministratorUseCase createFirstAdministrator,
@@ -138,6 +142,7 @@ public final class DesktopRuntime implements AutoCloseable {
     this.maintainAppointment = maintainAppointment;
     this.maintainAttendance = maintainAttendance;
     this.registerPayment = registerPayment;
+    this.refundPayment = refundPayment;
     this.manageCashTurn = manageCashTurn;
     this.authorization = authorization;
     this.createFirstAdministrator = createFirstAdministrator;
@@ -276,6 +281,16 @@ public final class DesktopRuntime implements AutoCloseable {
               stationId);
       CashTurnRepository cashTurns =
           new SqliteCashTurnRepository(database.connection(), unitOfWork);
+      RefundPaymentUseCase refundPayment =
+          new RefundPaymentUseCase(
+              unitOfWork,
+              payments,
+              new SqlitePaymentRefundRepository(database.connection(), unitOfWork),
+              cashTurns,
+              new SqliteOutboxRepository(database.connection(), unitOfWork),
+              authorization,
+              audit,
+              stationId);
       ManageCashTurnUseCase manageCashTurn =
           new ManageCashTurnUseCase(
               unitOfWork,
@@ -329,6 +344,7 @@ public final class DesktopRuntime implements AutoCloseable {
           maintainAppointment,
           maintainAttendance,
           registerPayment,
+          refundPayment,
           manageCashTurn,
           authorization,
           createFirstAdministrator,
@@ -415,6 +431,10 @@ public final class DesktopRuntime implements AutoCloseable {
 
   public RegisterPaymentUseCase registerPayment() {
     return registerPayment;
+  }
+
+  public RefundPaymentUseCase refundPayment() {
+    return refundPayment;
   }
 
   public ManageCashTurnUseCase manageCashTurn() {

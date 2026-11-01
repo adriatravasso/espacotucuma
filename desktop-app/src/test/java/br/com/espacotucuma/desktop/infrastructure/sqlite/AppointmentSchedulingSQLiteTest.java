@@ -9,6 +9,7 @@ import br.com.espacotucuma.desktop.application.attendance.MaintainAttendanceUseC
 import br.com.espacotucuma.desktop.application.finance.CashMovementType;
 import br.com.espacotucuma.desktop.application.finance.ManageCashTurnUseCase;
 import br.com.espacotucuma.desktop.application.finance.PaymentMethod;
+import br.com.espacotucuma.desktop.application.finance.RefundPaymentUseCase;
 import br.com.espacotucuma.desktop.application.finance.RegisterPaymentUseCase;
 import br.com.espacotucuma.desktop.application.identity.AuthenticatedUser;
 import br.com.espacotucuma.desktop.application.identity.AuthorizationException;
@@ -278,6 +279,11 @@ class AppointmentSchedulingSQLiteTest {
           fixture.attendance.applyDiscount(attendance.id(), Money.of("5.00"), "Ajuste aprovado");
       assertEquals(2500, discounted.subtotal().amount().movePointRight(2).intValueExact());
       assertEquals(2000, discounted.total().amount().movePointRight(2).intValueExact());
+      assertThrows(
+          IllegalArgumentException.class,
+          () ->
+              fixture.attendance.applyDiscount(
+                  attendance.id(), Money.of("25.01"), "Acima do subtotal"));
 
       fixture.execute(
           "CREATE TRIGGER trg_test_reject_attendance_audit BEFORE INSERT ON evento_auditoria "
@@ -412,6 +418,96 @@ class AppointmentSchedulingSQLiteTest {
           3,
           fixture.scalar(
               "SELECT COUNT(*) FROM evento_auditoria WHERE acao='RECEBIMENTO_REGISTRADO'"));
+    }
+  }
+
+  @Test
+  void refundsAreAuthorizedIdempotentTraceableAndReduceReceivableAndCashOnce(@TempDir Path temp)
+      throws Exception {
+    try (Fixture fixture = new Fixture(temp.resolve("refunds.sqlite"))) {
+      var appointment = fixture.createAt(9, 0);
+      fixture.maintain.confirm(appointment.id());
+      var attendance = fixture.attendance.startFromAppointment(appointment.id());
+      fixture.attendance.addService(attendance.id(), fixture.serviceId, 1);
+      fixture.attendance.complete(attendance.id());
+      fixture.openCashTurn();
+      var payment =
+          fixture.payments.register(
+              attendance.id(), PaymentMethod.DINHEIRO, Money.of("25.00"), "refund-payment");
+      int commissionsBefore = fixture.scalar("SELECT COUNT(*) FROM comissao");
+      assertEquals(
+          2_500,
+          fixture
+              .cashTurnRepository
+              .expectedTotals(fixture.cashTurns.currentTurn().orElseThrow().id())
+              .get(PaymentMethod.DINHEIRO));
+
+      var refund = fixture.refunds.refund(payment.id(), 1_000, "Cobrança duplicada", "refund-once");
+      var replay = fixture.refunds.refund(payment.id(), 1_000, "Cobrança duplicada", "refund-once");
+      assertEquals(refund.id(), replay.id());
+      assertThrows(
+          IllegalStateException.class,
+          () -> fixture.refunds.refund(payment.id(), 500, "Outro motivo", "refund-once"));
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> fixture.refunds.refund(payment.id(), 1_501, "Excede recebido", "refund-too-much"));
+
+      assertEquals(1, fixture.scalar("SELECT COUNT(*) FROM recebimento"));
+      assertEquals(1, fixture.scalar("SELECT COUNT(*) FROM estorno_recebimento"));
+      assertEquals(1, fixture.scalar("SELECT COUNT(*) FROM movimento_caixa WHERE tipo='ESTORNO'"));
+      assertEquals(
+          1_500,
+          fixture
+              .payments
+              .summary(attendance.id())
+              .received()
+              .amount()
+              .movePointRight(2)
+              .intValueExact());
+      assertEquals(
+          1_500,
+          fixture
+              .cashTurnRepository
+              .expectedTotals(fixture.cashTurns.currentTurn().orElseThrow().id())
+              .get(PaymentMethod.DINHEIRO));
+      assertEquals(commissionsBefore, fixture.scalar("SELECT COUNT(*) FROM comissao"));
+      assertEquals(
+          1,
+          fixture.scalar(
+              "SELECT COUNT(*) FROM evento_auditoria WHERE acao='RECEBIMENTO_ESTORNADO'"));
+      assertEquals(
+          1,
+          fixture.scalar(
+              "SELECT COUNT(*) FROM operacao_pendente WHERE entidade='estorno_recebimento'"));
+      fixture.refunds.refund(payment.id(), 1_500, "Cancelamento do restante", "refund-rest");
+      assertEquals(
+          0,
+          fixture
+              .payments
+              .summary(attendance.id())
+              .received()
+              .amount()
+              .movePointRight(2)
+              .intValueExact());
+      assertEquals(
+          "ESTORNADO",
+          fixture.string("SELECT estado FROM recebimento WHERE id='" + payment.id() + "'"));
+      assertEquals(
+          0,
+          fixture
+              .cashTurnRepository
+              .expectedTotals(fixture.cashTurns.currentTurn().orElseThrow().id())
+              .get(PaymentMethod.DINHEIRO));
+      assertThrows(
+          java.sql.SQLException.class,
+          () -> fixture.execute("DELETE FROM recebimento WHERE id='" + payment.id() + "'"));
+
+      fixture.sessions.establish(
+          new AuthenticatedUser(UUID.randomUUID(), "Recepção", "recepcao", UserRole.RECEPCAO));
+      assertThrows(
+          br.com.espacotucuma.desktop.application.identity.AuthorizationException.class,
+          () ->
+              fixture.refunds.refund(payment.id(), 100, "Sem autorização", "refund-unauthorized"));
     }
   }
 
@@ -576,7 +672,9 @@ class AppointmentSchedulingSQLiteTest {
     final MaintainAppointmentUseCase maintain;
     final MaintainAttendanceUseCase attendance;
     final RegisterPaymentUseCase payments;
+    final RefundPaymentUseCase refunds;
     final ManageCashTurnUseCase cashTurns;
+    final SqliteCashTurnRepository cashTurnRepository;
     final SessionContext sessions;
     final AuthorizationService authorization;
     final UUID adminId;
@@ -656,10 +754,22 @@ class AppointmentSchedulingSQLiteTest {
               audit,
               STATION,
               Clock.fixed(NOW, ZoneId.of("America/Manaus")));
+      cashTurnRepository = new SqliteCashTurnRepository(database.connection(), unitOfWork);
+      refunds =
+          new RefundPaymentUseCase(
+              unitOfWork,
+              new SqlitePaymentRepository(database.connection(), unitOfWork),
+              new SqlitePaymentRefundRepository(database.connection(), unitOfWork),
+              cashTurnRepository,
+              outbox,
+              authorization,
+              audit,
+              STATION,
+              Clock.fixed(NOW, ZoneId.of("America/Manaus")));
       cashTurns =
           new ManageCashTurnUseCase(
               unitOfWork,
-              new SqliteCashTurnRepository(database.connection(), unitOfWork),
+              cashTurnRepository,
               outbox,
               audit,
               authorization,
@@ -827,6 +937,13 @@ class AppointmentSchedulingSQLiteTest {
       try (Statement statement = database.connection().createStatement();
           ResultSet row = statement.executeQuery(sql)) {
         return row.next() ? row.getInt(1) : -1;
+      }
+    }
+
+    String string(String sql) throws Exception {
+      try (Statement statement = database.connection().createStatement();
+          ResultSet rows = statement.executeQuery(sql)) {
+        return rows.next() ? rows.getString(1) : null;
       }
     }
 
