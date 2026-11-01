@@ -11,6 +11,8 @@ import java.time.Instant;
 import java.util.Base64;
 import java.util.HexFormat;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpHeaders;
@@ -28,6 +30,8 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/sync")
 class DeviceAuthenticationController {
+  private static final Logger LOGGER =
+      LoggerFactory.getLogger(DeviceAuthenticationController.class);
   private static final Duration PAIRING_LIFETIME = Duration.ofMinutes(30);
   private static final Duration ACCESS_TOKEN_LIFETIME = Duration.ofMinutes(15);
   private static final SecureRandom RANDOM = new SecureRandom();
@@ -47,6 +51,7 @@ class DeviceAuthenticationController {
       @RequestHeader(name = HttpHeaders.AUTHORIZATION, required = false) String authorization,
       @RequestBody EnrollmentRequest request) {
     if (!isProvisioningAdmin(authorization)) {
+      LOGGER.warn("Device enrollment denied");
       return unauthorized();
     }
     if (request == null
@@ -82,6 +87,7 @@ class DeviceAuthenticationController {
         hash(pairingCode),
         establishmentId,
         Timestamp.from(expiresAt));
+    LOGGER.info("Device enrollment issued establishmentId={}", establishmentId);
     return noStore(new EnrollmentResponse(establishmentId, pairingCode, expiresAt));
   }
 
@@ -90,7 +96,10 @@ class DeviceAuthenticationController {
   ResponseEntity<?> replaceStation(
       @RequestHeader(name = HttpHeaders.AUTHORIZATION, required = false) String authorization,
       @RequestBody StationReplacementRequest request) {
-    if (!isProvisioningAdmin(authorization)) return unauthorized();
+    if (!isProvisioningAdmin(authorization)) {
+      LOGGER.warn("Station replacement denied");
+      return unauthorized();
+    }
     if (request == null
         || request.establishmentId() == null
         || request.deviceName() == null
@@ -120,6 +129,7 @@ class DeviceAuthenticationController {
         hash(pairingCode),
         request.establishmentId(),
         Timestamp.from(expiresAt));
+    LOGGER.info("Station replacement issued establishmentId={}", request.establishmentId());
     return noStore(new EnrollmentResponse(request.establishmentId(), pairingCode, expiresAt));
   }
 
@@ -174,6 +184,7 @@ class DeviceAuthenticationController {
     jdbc.update(
         "UPDATE codigo_pareamento SET consumido_em = now() WHERE token_hash = ?",
         hash(request.pairingCode()));
+    LOGGER.info("Device paired establishmentId={} deviceId={}", establishmentId, deviceId);
     return noStore(new PairingResponse(establishmentId, deviceId, deviceCredential));
   }
 
@@ -206,6 +217,7 @@ class DeviceAuthenticationController {
         hash(accessToken),
         deviceId,
         Timestamp.from(expiresAt));
+    LOGGER.info("Device access token issued deviceId={}", deviceId);
     return noStore(new AccessTokenResponse(accessToken, expiresAt));
   }
 
@@ -214,6 +226,7 @@ class DeviceAuthenticationController {
       @RequestHeader(name = HttpHeaders.AUTHORIZATION, required = false) String authorization,
       @PathVariable("deviceId") UUID deviceId) {
     if (!isProvisioningAdmin(authorization)) {
+      LOGGER.warn("Device revocation denied deviceId={}", deviceId);
       return unauthorized();
     }
     int updated =
@@ -224,6 +237,7 @@ class DeviceAuthenticationController {
     if (updated == 0) {
       return ResponseEntity.notFound().build();
     }
+    LOGGER.info("Device revoked deviceId={}", deviceId);
     return ResponseEntity.noContent().build();
   }
 
