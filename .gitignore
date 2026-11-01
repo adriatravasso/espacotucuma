@@ -3,3 +3,6 @@
 .idea/
 *.iml
 .env
+*.db
+*.sqlite
+*.sqlite3
