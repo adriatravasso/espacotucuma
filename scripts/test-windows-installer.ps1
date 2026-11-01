@@ -89,7 +89,7 @@ function Find-PackagedExecutable {
 
 function Invoke-PackagedSmoke {
     $exe = Find-PackagedExecutable
-    Write-Output "Executável instalado: $exe"
+    Write-Host "Executável instalado: $exe"
     $env:TUCUMA_PROFILE = 'test'
     $env:TUCUMA_DATA_ROOT = $dataRoot
     $process = Start-Process -FilePath $exe -ArgumentList '--smoke-test' -PassThru -Wait
@@ -97,6 +97,7 @@ function Invoke-PackagedSmoke {
     if (-not (Test-Path $marker)) { throw 'Aplicação não criou o banco no diretório externo de dados.' }
     $clientId = & $java -cp "$work;$jars\*" PackageDatabaseVerifier $marker
     Assert-NativeExit 'Verificação do banco após abertura offline'
+    Write-Host "Cadastro sintético persistido: $($clientId.Trim())"
     return $clientId.Trim()
 }
 
@@ -147,7 +148,7 @@ try {
     Install-Package $msiTwo
     $clientIdAfterUpgrade = Invoke-PackagedSmoke
     if ($clientIdAfterUpgrade -ne $clientIdBeforeUpgrade) {
-        throw 'Upgrade alterou o cadastro ou substituiu o banco SQLite externo.'
+        throw "Upgrade alterou o cadastro ou substituiu o banco SQLite externo. ID anterior: '$clientIdBeforeUpgrade'; ID posterior: '$clientIdAfterUpgrade'."
     }
 
     & msiexec.exe /x $msiTwo /quiet /norestart
