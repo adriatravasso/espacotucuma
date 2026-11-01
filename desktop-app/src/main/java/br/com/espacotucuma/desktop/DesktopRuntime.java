@@ -302,7 +302,8 @@ public final class DesktopRuntime implements AutoCloseable {
               new SqliteOutboxRepository(database.connection(), unitOfWork),
               authorization,
               audit,
-              stationId);
+              stationId,
+              maintainInventory);
       PaymentRepository payments = new SqlitePaymentRepository(database.connection(), unitOfWork);
       RegisterPaymentUseCase registerPayment =
           new RegisterPaymentUseCase(

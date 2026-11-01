@@ -3,7 +3,9 @@ package br.com.espacotucuma.desktop.application.port.inventory;
 import br.com.espacotucuma.desktop.application.Page;
 import br.com.espacotucuma.desktop.application.inventory.Product;
 import br.com.espacotucuma.desktop.application.inventory.ProductPageQuery;
+import br.com.espacotucuma.desktop.application.inventory.ServiceMaterial;
 import br.com.espacotucuma.desktop.application.inventory.StockEntry;
+import br.com.espacotucuma.desktop.application.inventory.StockMovement;
 import br.com.espacotucuma.desktop.application.inventory.StockProduct;
 import br.com.espacotucuma.desktop.application.inventory.Supplier;
 import java.time.Instant;
@@ -26,6 +28,26 @@ public interface InventoryRepository {
 
   boolean hasStockMovements(UUID productId);
 
+  long stockOnHand(UUID productId);
+
+  List<StockMovement> movementHistory(UUID productId);
+
+  Optional<StockMovement> findMovementByKey(String key);
+
+  Optional<StockMovement> findMovementById(UUID id);
+
+  Optional<StockMovement> findReversal(UUID originalMovementId);
+
+  List<ServiceMaterial> serviceMaterials(UUID serviceId);
+
+  List<ServiceMaterial> serviceMaterialsForActiveServices(List<UUID> serviceIds);
+
+  boolean serviceIsActive(UUID serviceId);
+
+  void saveServiceMaterial(UUID serviceId, UUID productId, long quantityMilliUnits, Instant at);
+
+  void deactivateServiceMaterial(UUID serviceId, UUID productId, Instant at);
+
   void insertSupplier(Supplier supplier);
 
   void updateSupplier(Supplier supplier);
@@ -39,4 +61,6 @@ public interface InventoryRepository {
   void deactivateProduct(UUID id, Instant at);
 
   void insertStockEntry(StockEntry entry);
+
+  void insertMovement(StockMovement movement);
 }

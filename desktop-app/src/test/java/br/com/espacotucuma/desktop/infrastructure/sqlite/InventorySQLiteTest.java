@@ -102,6 +102,64 @@ class InventorySQLiteTest {
     }
   }
 
+  @Test
+  void exitsAdjustmentsAndCompensatingReversalsNeverCreateNegativeOrDuplicateStock(
+      @TempDir Path temp) throws Exception {
+    try (Fixture fixture = new Fixture(temp.resolve("movement-reversal.sqlite"))) {
+      var product =
+          fixture.useCase.registerProduct(
+              null, null, "Gaze", "Insumos", UnitOfMeasure.UNIDADE, Money.of("1.00"), null, 0);
+      var receipt =
+          fixture.useCase.registerEntry(
+              product.id(), 10_000, "Compra", UUID.randomUUID().toString());
+      var exit =
+          fixture.useCase.registerExit(
+              product.id(), 2_000, "Uso interno", UUID.randomUUID().toString());
+      var adjustment =
+          fixture.useCase.adjust(
+              product.id(), -1_000, "Contagem física", UUID.randomUUID().toString());
+      assertEquals(7_000, fixture.repository.stockOnHand(product.id()));
+      assertThrows(
+          IllegalStateException.class,
+          () ->
+              fixture.useCase.registerExit(
+                  product.id(), 8_000, "Retirada", UUID.randomUUID().toString()));
+
+      String reversalKey = UUID.randomUUID().toString();
+      var reversal = fixture.useCase.reverseMovement(exit.id(), "Retirada cancelada", reversalKey);
+      assertEquals(
+          reversal, fixture.useCase.reverseMovement(exit.id(), "Retirada cancelada", reversalKey));
+      assertEquals(9_000, fixture.repository.stockOnHand(product.id()));
+      assertThrows(
+          IllegalStateException.class,
+          () ->
+              fixture.useCase.reverseMovement(
+                  exit.id(), "Duplicado", UUID.randomUUID().toString()));
+      assertThrows(
+          IllegalStateException.class,
+          () ->
+              fixture.useCase.reverseMovement(
+                  receipt.id(), "Sem saldo suficiente", UUID.randomUUID().toString()));
+      assertEquals(9_000, fixture.repository.stockOnHand(product.id()));
+      assertEquals(
+          1,
+          fixture.scalar(
+              "SELECT COUNT(*) FROM movimento_estoque WHERE movimento_origem_id='"
+                  + exit.id()
+                  + "'"));
+      assertThrows(
+          java.sql.SQLException.class,
+          () ->
+              fixture.execute(
+                  "UPDATE movimento_estoque SET quantidade_milesimos=1 WHERE id='"
+                      + exit.id()
+                      + "'"));
+      assertThrows(
+          java.sql.SQLException.class,
+          () -> fixture.execute("DELETE FROM movimento_estoque WHERE id='" + exit.id() + "'"));
+    }
+  }
+
   private static final class Fixture implements AutoCloseable {
     private final LocalDatabaseSession database;
     private final SqliteInventoryRepository repository;
@@ -155,6 +213,12 @@ class InventorySQLiteTest {
       try (Statement s = database.connection().createStatement();
           ResultSet r = s.executeQuery(sql)) {
         return r.next() ? r.getInt(1) : -1;
+      }
+    }
+
+    void execute(String sql) throws Exception {
+      try (Statement statement = database.connection().createStatement()) {
+        statement.execute(sql);
       }
     }
 

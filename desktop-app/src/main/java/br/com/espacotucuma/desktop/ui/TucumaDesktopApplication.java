@@ -68,7 +68,10 @@ public final class TucumaDesktopApplication extends Application {
         new CommissionStatementPane(runtime.closeCommissionCompetency(), runtime.authorization());
     InventoryPane inventoryPane =
         new InventoryPane(
-            runtime.inventory(), runtime.maintainInventory(), runtime.authorization());
+            runtime.inventory(),
+            runtime.maintainInventory(),
+            runtime.authorization(),
+            runtime.services());
     shell =
         new TucumaMainShell(
             runtime::protectionStatus,

@@ -1,5 +1,6 @@
 package br.com.espacotucuma.desktop.application.inventory;
 
+import br.com.espacotucuma.desktop.application.attendance.AttendanceServiceLine;
 import br.com.espacotucuma.desktop.application.audit.AuditEvent;
 import br.com.espacotucuma.desktop.application.identity.AuthorizationService;
 import br.com.espacotucuma.desktop.application.identity.Permission;
@@ -331,6 +332,310 @@ public final class MaintainInventoryUseCase {
               now);
           return entry;
         });
+  }
+
+  public StockMovement registerExit(
+      UUID productId, long quantityMilliUnits, String reason, String idempotencyKey) {
+    return registerManualMovement(
+        productId,
+        StockMovementType.SAIDA,
+        null,
+        quantityMilliUnits,
+        reason,
+        idempotencyKey,
+        null,
+        null);
+  }
+
+  public StockMovement adjust(
+      UUID productId, long signedQuantityMilliUnits, String reason, String idempotencyKey) {
+    if (signedQuantityMilliUnits == 0 || signedQuantityMilliUnits == Long.MIN_VALUE)
+      throw new IllegalArgumentException("Informe uma quantidade de ajuste diferente de zero.");
+    AdjustmentDirection direction =
+        signedQuantityMilliUnits > 0 ? AdjustmentDirection.ENTRADA : AdjustmentDirection.SAIDA;
+    return registerManualMovement(
+        productId,
+        StockMovementType.AJUSTE,
+        direction,
+        Math.abs(signedQuantityMilliUnits),
+        reason,
+        idempotencyKey,
+        null,
+        null);
+  }
+
+  public StockMovement reverseMovement(UUID movementId, String reason, String idempotencyKey) {
+    var actor = authorization.requireUser(Permission.INVENTORY_MANAGE);
+    String key = required(idempotencyKey, 1, 120, "Informe uma chave idempotente válida.");
+    String normalizedReason = required(reason, 2, 240, "Informe o motivo do estorno.");
+    Instant at = now();
+    return unitOfWork.execute(
+        () -> {
+          var existing = inventory.findReversal(Objects.requireNonNull(movementId));
+          if (existing.isPresent()) {
+            if (existing.get().idempotencyKey().equals(key)
+                && existing.get().reason().equals(normalizedReason)) return existing.get();
+            throw new IllegalStateException("Este movimento já possui um estorno.");
+          }
+          StockMovement original =
+              inventory
+                  .findMovementById(movementId)
+                  .orElseThrow(() -> new IllegalArgumentException("Movimento não encontrado."));
+          if (original.reversesMovementId() != null)
+            throw new IllegalStateException("Um estorno não pode ser estornado novamente.");
+          if (inventory.findMovementByKey(key).isPresent())
+            throw new IllegalStateException("A chave idempotente já foi utilizada.");
+          boolean originalAddsStock = addsStock(original);
+          AdjustmentDirection inverse =
+              originalAddsStock ? AdjustmentDirection.SAIDA : AdjustmentDirection.ENTRADA;
+          if (inverse == AdjustmentDirection.SAIDA
+              && inventory.stockOnHand(original.productId()) < original.quantityMilliUnits())
+            throw new IllegalStateException("Saldo insuficiente para estornar este movimento.");
+          StockMovement reversal =
+              new StockMovement(
+                  UUID.randomUUID(),
+                  original.productId(),
+                  null,
+                  null,
+                  StockMovementType.AJUSTE,
+                  inverse,
+                  original.quantityMilliUnits(),
+                  original.unitCostCents(),
+                  normalizedReason,
+                  key,
+                  original.id(),
+                  actor.id(),
+                  at);
+          inventory.insertMovement(reversal);
+          recordMovement(reversal, actor.id(), at, "ESTOQUE_MOVIMENTO_ESTORNADO");
+          return reversal;
+        });
+  }
+
+  public ServiceMaterial configureServiceMaterial(
+      UUID serviceId, UUID productId, long quantityMilliUnits) {
+    var actor = authorization.requireUser(Permission.INVENTORY_MANAGE);
+    if (quantityMilliUnits <= 0)
+      throw new IllegalArgumentException("A quantidade por serviço deve ser positiva.");
+    Instant at = now();
+    return unitOfWork.execute(
+        () -> {
+          if (!inventory.serviceIsActive(Objects.requireNonNull(serviceId)))
+            throw new IllegalArgumentException("Selecione um serviço ativo.");
+          Product product =
+              inventory
+                  .findProduct(Objects.requireNonNull(productId))
+                  .orElseThrow(() -> new IllegalArgumentException("Produto não encontrado."));
+          if (!product.active()) throw new IllegalArgumentException("Selecione um produto ativo.");
+          if (product.unit().integral() && quantityMilliUnits % 1000 != 0)
+            throw new IllegalArgumentException("A quantidade deve ser inteira para esta unidade.");
+          inventory.saveServiceMaterial(serviceId, productId, quantityMilliUnits, at);
+          UUID materialId =
+              UUID.nameUUIDFromBytes(
+                  (serviceId + ":" + productId).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+          String payload =
+              "{\"servicoId\":\""
+                  + serviceId
+                  + "\",\"produtoId\":\""
+                  + productId
+                  + "\",\"quantidadeMilesimos\":"
+                  + quantityMilliUnits
+                  + ",\"ativo\":true}";
+          record(
+              "material_servico",
+              materialId,
+              "MATERIAL_SERVICO_CONFIGURADO",
+              payload,
+              "{\"servicoId\":\"" + serviceId + "\",\"produtoId\":\"" + productId + "\"}",
+              actor.id(),
+              at);
+          return inventory.serviceMaterials(serviceId).stream()
+              .filter(m -> m.productId().equals(productId))
+              .findFirst()
+              .orElseThrow();
+        });
+  }
+
+  public void removeServiceMaterial(UUID serviceId, UUID productId) {
+    var actor = authorization.requireUser(Permission.INVENTORY_MANAGE);
+    Instant at = now();
+    unitOfWork.execute(
+        () -> {
+          inventory.deactivateServiceMaterial(serviceId, productId, at);
+          UUID materialId =
+              UUID.nameUUIDFromBytes(
+                  (serviceId + ":" + productId).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+          record(
+              "material_servico",
+              materialId,
+              "MATERIAL_SERVICO_REMOVIDO",
+              "{\"servicoId\":\""
+                  + serviceId
+                  + "\",\"produtoId\":\""
+                  + productId
+                  + "\",\"ativo\":false}",
+              "{\"servicoId\":\"" + serviceId + "\",\"produtoId\":\"" + productId + "\"}",
+              actor.id(),
+              at);
+          return null;
+        });
+  }
+
+  /** Called only by attendance completion while its SQLite transaction is already active. */
+  public java.util.List<StockMovement> consumeForAttendanceLine(
+      UUID attendanceId, AttendanceServiceLine line, UUID actorId, Instant at) {
+    var actor = authorization.requireUser(Permission.ATTENDANCE_RECORD);
+    if (!actor.id().equals(actorId))
+      throw new IllegalArgumentException("O consumo deve ser atribuído ao usuário da sessão.");
+    java.util.List<ServiceMaterial> recipe =
+        inventory.serviceMaterialsForActiveServices(java.util.List.of(line.serviceId()));
+    java.util.List<StockMovement> applied = new java.util.ArrayList<>();
+    for (ServiceMaterial material : recipe) {
+      Product product = inventory.findProduct(material.productId()).orElseThrow();
+      if (!product.active())
+        throw new IllegalStateException("Um material configurado está inativo.");
+      long requiredQuantity = Math.multiplyExact(material.quantityMilliUnits(), line.quantity());
+      String key = "consumo:" + attendanceId + ":" + line.id() + ":" + product.id();
+      var prior = inventory.findMovementByKey(key);
+      if (prior.isPresent()) {
+        StockMovement movement = prior.get();
+        if (!movement.attendanceId().equals(attendanceId)
+            || !movement.attendanceServiceLineId().equals(line.id())
+            || movement.quantityMilliUnits() != requiredQuantity)
+          throw new IllegalStateException("A chave do consumo aponta para outro movimento.");
+        applied.add(movement);
+        continue;
+      }
+      if (inventory.stockOnHand(product.id()) < requiredQuantity)
+        throw new IllegalStateException("Saldo insuficiente para consumir " + product.name() + ".");
+      StockMovement movement =
+          new StockMovement(
+              UUID.randomUUID(),
+              product.id(),
+              attendanceId,
+              line.id(),
+              StockMovementType.CONSUMO_SERVICO,
+              null,
+              requiredQuantity,
+              cents(product.unitCost()),
+              "Consumo: " + line.nameSnapshot(),
+              key,
+              null,
+              actorId,
+              at);
+      inventory.insertMovement(movement);
+      recordMovement(movement, actorId, at, "ESTOQUE_CONSUMIDO_POR_SERVICO");
+      applied.add(movement);
+    }
+    return java.util.List.copyOf(applied);
+  }
+
+  private StockMovement registerManualMovement(
+      UUID productId,
+      StockMovementType type,
+      AdjustmentDirection direction,
+      long quantity,
+      String reason,
+      String idempotencyKey,
+      UUID originalId,
+      UUID attendanceId) {
+    var actor = authorization.requireUser(Permission.INVENTORY_MANAGE);
+    String key = required(idempotencyKey, 1, 120, "Informe uma chave idempotente válida.");
+    String normalizedReason = required(reason, 2, 240, "Informe um motivo válido.");
+    if (quantity <= 0) throw new IllegalArgumentException("A quantidade deve ser positiva.");
+    Instant at = now();
+    return unitOfWork.execute(
+        () -> {
+          Product product =
+              inventory
+                  .findProduct(Objects.requireNonNull(productId))
+                  .orElseThrow(() -> new IllegalArgumentException("Produto não encontrado."));
+          if (!product.active())
+            throw new IllegalStateException("Não é possível movimentar um produto inativo.");
+          if (product.unit().integral() && quantity % 1000 != 0)
+            throw new IllegalArgumentException("Informe quantidade inteira para esta unidade.");
+          var previous = inventory.findMovementByKey(key);
+          if (previous.isPresent()) {
+            StockMovement p = previous.get();
+            if (p.productId().equals(productId)
+                && p.type() == type
+                && p.quantityMilliUnits() == quantity
+                && p.reason().equals(normalizedReason)
+                && p.adjustmentDirection() == direction) return p;
+            throw new IllegalStateException(
+                "A chave idempotente já foi usada para outro movimento.");
+          }
+          if ((type == StockMovementType.SAIDA || direction == AdjustmentDirection.SAIDA)
+              && inventory.stockOnHand(productId) < quantity)
+            throw new IllegalStateException("Saldo insuficiente para esta movimentação.");
+          StockMovement movement =
+              new StockMovement(
+                  UUID.randomUUID(),
+                  productId,
+                  attendanceId,
+                  null,
+                  type,
+                  direction,
+                  quantity,
+                  cents(product.unitCost()),
+                  normalizedReason,
+                  key,
+                  originalId,
+                  actor.id(),
+                  at);
+          inventory.insertMovement(movement);
+          recordMovement(movement, actor.id(), at, "ESTOQUE_" + type.name() + "_REGISTRADO");
+          return movement;
+        });
+  }
+
+  private boolean addsStock(StockMovement movement) {
+    return movement.type() == StockMovementType.ENTRADA
+        || (movement.type() == StockMovementType.AJUSTE
+            && movement.adjustmentDirection() == AdjustmentDirection.ENTRADA);
+  }
+
+  private void recordMovement(StockMovement movement, UUID actorId, Instant at, String action) {
+    String payload =
+        "{\"id\":\""
+            + movement.id()
+            + "\",\"produtoId\":\""
+            + movement.productId()
+            + "\",\"atendimentoId\":"
+            + (movement.attendanceId() == null ? "null" : "\"" + movement.attendanceId() + "\"")
+            + ",\"tipo\":\""
+            + movement.type().name()
+            + "\",\"direcaoAjuste\":"
+            + (movement.adjustmentDirection() == null
+                ? "null"
+                : "\"" + movement.adjustmentDirection().name() + "\"")
+            + ",\"quantidadeMilesimos\":"
+            + movement.quantityMilliUnits()
+            + ",\"custoUnitarioCentavos\":"
+            + movement.unitCostCents()
+            + ",\"motivo\":\""
+            + escape(movement.reason())
+            + "\",\"chaveIdempotencia\":\""
+            + escape(movement.idempotencyKey())
+            + "\",\"movimentoOrigemId\":"
+            + (movement.reversesMovementId() == null
+                ? "null"
+                : "\"" + movement.reversesMovementId() + "\"")
+            + "}";
+    record(
+        "movimento_estoque",
+        movement.id(),
+        action,
+        payload,
+        "{\"produtoId\":\""
+            + movement.productId()
+            + "\",\"quantidadeMilesimos\":"
+            + movement.quantityMilliUnits()
+            + ",\"motivo\":\""
+            + escape(movement.reason())
+            + "\"}",
+        actorId,
+        at);
   }
 
   public void requireReadAccess() {
