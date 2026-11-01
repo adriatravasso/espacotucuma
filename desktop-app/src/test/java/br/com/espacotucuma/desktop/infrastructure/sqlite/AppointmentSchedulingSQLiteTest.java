@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import br.com.espacotucuma.desktop.application.attendance.AttendanceStatus;
+import br.com.espacotucuma.desktop.application.attendance.MaintainAttendanceUseCase;
 import br.com.espacotucuma.desktop.application.identity.AuthenticatedUser;
 import br.com.espacotucuma.desktop.application.identity.AuthorizationException;
 import br.com.espacotucuma.desktop.application.identity.AuthorizationService;
@@ -15,6 +17,7 @@ import br.com.espacotucuma.desktop.application.port.professional.ProfessionalRep
 import br.com.espacotucuma.desktop.application.port.service.ServiceRepository;
 import br.com.espacotucuma.desktop.application.scheduling.AppointmentStatus;
 import br.com.espacotucuma.desktop.application.scheduling.MaintainAppointmentUseCase;
+import br.com.espacotucuma.desktop.domain.money.Money;
 import br.com.espacotucuma.desktop.infrastructure.security.Pbkdf2PasswordHasher;
 import java.nio.file.Path;
 import java.sql.PreparedStatement;
@@ -235,6 +238,80 @@ class AppointmentSchedulingSQLiteTest {
   }
 
   @Test
+  void attendanceSnapshotsPriceAndCompletesAtomicallyWithoutCreatingPayment(@TempDir Path temp)
+      throws Exception {
+    try (Fixture fixture = new Fixture(temp.resolve("attendance-workflow.sqlite"))) {
+      var appointment = fixture.createAt(9, 0);
+      fixture.maintain.confirm(appointment.id());
+
+      var attendance = fixture.attendance.startFromAppointment(appointment.id());
+      assertEquals(
+          AppointmentStatus.EM_ATENDIMENTO, fixture.maintain.findById(appointment.id()).status());
+      assertEquals(attendance.id(), fixture.attendance.startFromAppointment(appointment.id()).id());
+      assertThrows(IllegalStateException.class, () -> fixture.attendance.complete(attendance.id()));
+
+      var serviceLine = fixture.attendance.addService(attendance.id(), fixture.serviceId, 1);
+      assertEquals(2500, serviceLine.unitPrice().amount().movePointRight(2).intValueExact());
+      assertEquals(
+          serviceLine.id(),
+          fixture.attendance.addService(attendance.id(), fixture.serviceId, 1).id());
+      assertEquals(1, fixture.scalar("SELECT COUNT(*) FROM atendimento_servico"));
+      fixture.execute(
+          "UPDATE servico SET preco_centavos=4000 WHERE id='" + fixture.serviceId + "'");
+      assertEquals(2500, fixture.scalar("SELECT preco_unitario_centavos FROM atendimento_servico"));
+      assertEquals(0, fixture.scalar("SELECT comissao_pontos_base FROM atendimento_servico"));
+
+      fixture.useReceptionRole();
+      assertThrows(
+          AuthorizationException.class,
+          () ->
+              fixture.attendance.applyDiscount(
+                  attendance.id(), Money.of("5.00"), "Ajuste aprovado"));
+      fixture.sessions.establish(
+          new AuthenticatedUser(fixture.adminId, "Admin Agenda", "admin", UserRole.ADMINISTRADOR));
+      var discounted =
+          fixture.attendance.applyDiscount(attendance.id(), Money.of("5.00"), "Ajuste aprovado");
+      assertEquals(2500, discounted.subtotal().amount().movePointRight(2).intValueExact());
+      assertEquals(2000, discounted.total().amount().movePointRight(2).intValueExact());
+
+      fixture.execute(
+          "CREATE TRIGGER trg_test_reject_attendance_audit BEFORE INSERT ON evento_auditoria "
+              + "WHEN NEW.acao='ATENDIMENTO_CONCLUIDO' BEGIN SELECT RAISE(ABORT, 'auditoria rejeitada'); END");
+      assertThrows(IllegalStateException.class, () -> fixture.attendance.complete(attendance.id()));
+      assertEquals(
+          AttendanceStatus.EM_ANDAMENTO, fixture.attendance.findById(attendance.id()).status());
+      assertEquals(
+          AppointmentStatus.EM_ATENDIMENTO, fixture.maintain.findById(appointment.id()).status());
+      assertEquals(0, fixture.scalar("SELECT COUNT(*) FROM recebimento"));
+      assertEquals(
+          0,
+          fixture.scalar(
+              "SELECT COUNT(*) FROM operacao_pendente WHERE tipo_operacao='ATENDIMENTO_CONCLUIDO'"));
+
+      fixture.execute("DROP TRIGGER trg_test_reject_attendance_audit");
+      var completed = fixture.attendance.complete(attendance.id());
+      assertEquals(AttendanceStatus.CONCLUIDO, completed.status());
+      assertEquals(
+          AppointmentStatus.CONCLUIDO, fixture.maintain.findById(appointment.id()).status());
+      assertEquals(0, fixture.scalar("SELECT COUNT(*) FROM recebimento"));
+      assertEquals(0, fixture.scalar("SELECT COUNT(*) FROM comissao"));
+      assertEquals(
+          1,
+          fixture.scalar(
+              "SELECT COUNT(*) FROM operacao_pendente WHERE entidade='atendimento' AND tipo_operacao='ATENDIMENTO_CONCLUIDO'"));
+      assertEquals(
+          1,
+          fixture.scalar(
+              "SELECT COUNT(*) FROM operacao_pendente WHERE entidade='agendamento' AND tipo_operacao='AGENDAMENTO_CONCLUIDO' AND payload_json LIKE '%inicioUtc%' AND payload_json LIKE '%excecaoConflito%'"));
+      assertThrows(IllegalStateException.class, () -> fixture.attendance.complete(attendance.id()));
+      assertEquals(
+          1,
+          fixture.scalar(
+              "SELECT COUNT(*) FROM evento_auditoria WHERE acao='ATENDIMENTO_CONCLUIDO'"));
+    }
+  }
+
+  @Test
   void concurrentCreatesOnSingleConnectionCannotClaimSameSlot(@TempDir Path temp) throws Exception {
     try (Fixture fixture = new Fixture(temp.resolve("schedule-concurrent.sqlite"))) {
       CountDownLatch ready = new CountDownLatch(2);
@@ -301,6 +378,7 @@ class AppointmentSchedulingSQLiteTest {
     final ServiceRepository services;
     final SqliteAppointmentRepository appointments;
     final MaintainAppointmentUseCase maintain;
+    final MaintainAttendanceUseCase attendance;
     final SessionContext sessions;
     final AuthorizationService authorization;
     final UUID adminId;
@@ -343,6 +421,7 @@ class AppointmentSchedulingSQLiteTest {
       professionals = new SqliteProfessionalRepository(database.connection(), unitOfWork);
       services = new SqliteServiceRepository(database.connection(), unitOfWork);
       appointments = new SqliteAppointmentRepository(database.connection(), unitOfWork);
+      var commissionRules = new SqliteCommissionRuleRepository(database.connection(), unitOfWork);
       insertFixtures();
       maintain =
           new MaintainAppointmentUseCase(
@@ -351,6 +430,18 @@ class AppointmentSchedulingSQLiteTest {
               clients,
               professionals,
               services,
+              outbox,
+              authorization,
+              audit,
+              STATION,
+              Clock.fixed(NOW, ZoneId.of("America/Manaus")));
+      attendance =
+          new MaintainAttendanceUseCase(
+              unitOfWork,
+              new SqliteAttendanceRepository(database.connection(), unitOfWork),
+              appointments,
+              services,
+              commissionRules,
               outbox,
               authorization,
               audit,
