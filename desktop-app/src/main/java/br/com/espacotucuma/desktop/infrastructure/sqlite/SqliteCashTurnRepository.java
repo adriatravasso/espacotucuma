@@ -111,9 +111,10 @@ public final class SqliteCashTurnRepository implements CashTurnRepository {
           EnumMap<PaymentMethod, Long> totals = new EnumMap<>(PaymentMethod.class);
           for (PaymentMethod method : PaymentMethod.values()) totals.put(method, 0L);
           String sql =
-              "SELECT r.forma,SUM(r.valor_centavos) total FROM recebimento r "
+              "SELECT r.forma,SUM(r.valor_centavos-COALESCE(x.estornado,0)) total FROM recebimento r "
                   + "JOIN movimento_caixa m ON m.recebimento_id=r.id "
-                  + "WHERE m.caixa_turno_id=? AND r.estado='CONFIRMADO' GROUP BY r.forma";
+                  + "LEFT JOIN (SELECT recebimento_id,SUM(valor_centavos) estornado FROM estorno_recebimento GROUP BY recebimento_id) x ON x.recebimento_id=r.id "
+                  + "WHERE m.caixa_turno_id=? GROUP BY r.forma";
           try (PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.setString(1, turnId.toString());
             try (ResultSet rows = statement.executeQuery()) {
@@ -134,7 +135,7 @@ public final class SqliteCashTurnRepository implements CashTurnRepository {
                   cash =
                       switch (rows.getString("tipo")) {
                         case "SUPRIMENTO" -> Math.addExact(cash, amount);
-                        case "SANGRIA", "SAIDA", "ESTORNO" -> Math.subtractExact(cash, amount);
+                        case "SANGRIA", "SAIDA" -> Math.subtractExact(cash, amount);
                         default -> cash;
                       };
                 }
@@ -224,6 +225,29 @@ public final class SqliteCashTurnRepository implements CashTurnRepository {
       statement.executeUpdate();
     } catch (SQLException failure) {
       throw new IllegalStateException("Não foi possível registrar o movimento de caixa.", failure);
+    }
+  }
+
+  @Override
+  public UUID recordRefund(
+      UUID turnId, UUID paymentId, long amountCents, String reason, UUID actorId, Instant at) {
+    requireTransaction();
+    requireOpen(turnId);
+    UUID movementId = UUID.randomUUID();
+    try (PreparedStatement statement =
+        connection.prepareStatement(
+            "INSERT INTO movimento_caixa (id,caixa_turno_id,recebimento_id,tipo,valor_centavos,motivo,"
+                + "criado_por_usuario_id,criado_em_utc) VALUES (?,?,NULL,'ESTORNO',?,?,?,?)")) {
+      statement.setString(1, movementId.toString());
+      statement.setString(2, turnId.toString());
+      statement.setLong(3, amountCents);
+      statement.setString(4, "Estorno do recebimento " + paymentId + ": " + reason);
+      statement.setString(5, actorId.toString());
+      statement.setString(6, at.toString());
+      statement.executeUpdate();
+      return movementId;
+    } catch (SQLException failure) {
+      throw new IllegalStateException("Não foi possível lançar o estorno no caixa.", failure);
     }
   }
 

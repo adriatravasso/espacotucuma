@@ -42,6 +42,22 @@ public final class SqlitePaymentRepository implements PaymentRepository {
   }
 
   @Override
+  public Optional<Payment> findById(UUID paymentId) {
+    return unitOfWork.read(
+        () -> {
+          try (PreparedStatement statement =
+              connection.prepareStatement("SELECT * FROM recebimento WHERE id=?")) {
+            statement.setString(1, paymentId.toString());
+            try (ResultSet rows = statement.executeQuery()) {
+              return rows.next() ? Optional.of(read(rows)) : Optional.empty();
+            }
+          } catch (SQLException failure) {
+            throw new IllegalStateException("Não foi possível consultar o recebimento.", failure);
+          }
+        });
+  }
+
+  @Override
   public List<Payment> findForAttendance(UUID attendanceId) {
     return unitOfWork.read(
         () -> {
@@ -67,8 +83,9 @@ public final class SqlitePaymentRepository implements PaymentRepository {
         () -> {
           try (PreparedStatement statement =
               connection.prepareStatement(
-                  "SELECT COALESCE(SUM(valor_centavos),0) FROM recebimento "
-                      + "WHERE atendimento_id=? AND estado='CONFIRMADO'")) {
+                  "SELECT COALESCE(SUM(r.valor_centavos-COALESCE(x.estornado,0)),0) FROM recebimento r "
+                      + "LEFT JOIN (SELECT recebimento_id,SUM(valor_centavos) estornado FROM estorno_recebimento GROUP BY recebimento_id) x ON x.recebimento_id=r.id "
+                      + "WHERE r.atendimento_id=?")) {
             statement.setString(1, attendanceId.toString());
             try (ResultSet row = statement.executeQuery()) {
               return row.next() ? row.getLong(1) : 0L;

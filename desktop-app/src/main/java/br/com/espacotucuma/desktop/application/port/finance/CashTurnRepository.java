@@ -27,6 +27,9 @@ public interface CashTurnRepository {
 
   void recordMovement(CashMovement movement);
 
+  UUID recordRefund(
+      UUID turnId, UUID paymentId, long amountCents, String reason, UUID actorId, Instant at);
+
   void close(
       UUID turnId,
       UUID closingId,

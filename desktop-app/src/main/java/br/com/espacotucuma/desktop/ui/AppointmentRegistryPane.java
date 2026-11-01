@@ -6,6 +6,7 @@ import br.com.espacotucuma.desktop.application.client.Client;
 import br.com.espacotucuma.desktop.application.client.ClientContactFilter;
 import br.com.espacotucuma.desktop.application.client.ClientPageQuery;
 import br.com.espacotucuma.desktop.application.client.ClientSortField;
+import br.com.espacotucuma.desktop.application.finance.RefundPaymentUseCase;
 import br.com.espacotucuma.desktop.application.finance.RegisterPaymentUseCase;
 import br.com.espacotucuma.desktop.application.identity.AuthorizationService;
 import br.com.espacotucuma.desktop.application.identity.Permission;
@@ -64,6 +65,7 @@ public final class AppointmentRegistryPane extends BorderPane {
   private final MaintainAttendanceUseCase attendanceUseCase;
   private final PrepaidPackageRepository prepaidPackages;
   private final RegisterPaymentUseCase registerPayment;
+  private RefundPaymentUseCase refundPayment;
   private final DatePicker date = new DatePicker(LocalDate.now(BUSINESS_ZONE));
   private final ComboBox<String> period = new ComboBox<>();
   private final ComboBox<ProfessionalChoice> professionalFilter = new ComboBox<>();
@@ -167,6 +169,28 @@ public final class AppointmentRegistryPane extends BorderPane {
     setPadding(new Insets(4));
     refreshProfessionals();
     refresh();
+  }
+
+  public AppointmentRegistryPane(
+      MaintainAppointmentUseCase appointments,
+      ClientRepository clients,
+      ProfessionalRepository professionals,
+      ServiceRepository services,
+      AuthorizationService authorization,
+      MaintainAttendanceUseCase attendanceUseCase,
+      PrepaidPackageRepository prepaidPackages,
+      RegisterPaymentUseCase registerPayment,
+      RefundPaymentUseCase refundPayment) {
+    this(
+        appointments,
+        clients,
+        professionals,
+        services,
+        authorization,
+        attendanceUseCase,
+        prepaidPackages,
+        registerPayment);
+    this.refundPayment = refundPayment;
   }
 
   public void setMutationListener(Runnable listener) {
@@ -469,6 +493,8 @@ public final class AppointmentRegistryPane extends BorderPane {
       Attendance attendance = registerPayment.findAttendanceByAppointment(row.appointment().id());
       new PaymentDialog(
               registerPayment,
+              refundPayment,
+              authorization,
               attendance.id(),
               row.clientName(),
               row.professionalName(),
