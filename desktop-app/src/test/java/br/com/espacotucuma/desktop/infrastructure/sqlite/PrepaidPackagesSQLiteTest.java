@@ -25,6 +25,8 @@ import java.time.ZoneId;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 class PrepaidPackagesSQLiteTest {
   private static final UUID STATION = UUID.fromString("9607c069-24c8-4f42-8692-67238ea673ec");
@@ -86,6 +88,44 @@ class PrepaidPackagesSQLiteTest {
     }
   }
 
+  @ParameterizedTest
+  @CsvSource({
+    "2026-10-31, 2026-11-01, false",
+    "2026-11-01, 2026-11-01, true",
+    "2026-11-01, 2026-11-02, false"
+  })
+  void packageIsUsableOnItsFinalValidBusinessDate(
+      String expiresOn, String today, boolean usable, @TempDir Path temp) throws Exception {
+    try (Fixture fixture =
+        new Fixture(
+            temp.resolve("expiry-boundary-" + expiresOn + ".sqlite"),
+            Clock.fixed(Instant.parse(today + "T12:00:00Z"), ZoneId.of("America/Manaus")))) {
+      var prepaidPackage = fixture.maintain.create("Pacote de validade", 1, 30, Money.of("30.00"));
+      UUID attendance = fixture.insertAttendance();
+      var balance =
+          fixture.maintain.contract(prepaidPackage.id(), fixture.clientId, PaymentForm.DINHEIRO);
+      fixture.execute(
+          "UPDATE saldo_sessoes SET valido_ate='"
+              + expiresOn
+              + "' WHERE id='"
+              + balance.id()
+              + "'");
+
+      if (usable) {
+        fixture.maintain.consume(balance.id(), attendance);
+        assertEquals(
+            0, fixture.repository.findBalance(balance.id()).orElseThrow().sessionsRemaining());
+        assertEquals(1, fixture.scalar("SELECT COUNT(*) FROM utilizacao_pacote"));
+      } else {
+        assertThrows(
+            IllegalStateException.class, () -> fixture.maintain.consume(balance.id(), attendance));
+        assertEquals(
+            1, fixture.repository.findBalance(balance.id()).orElseThrow().sessionsRemaining());
+        assertEquals(0, fixture.scalar("SELECT COUNT(*) FROM utilizacao_pacote"));
+      }
+    }
+  }
+
   @Test
   void reversalIsExplicitAndOnlyRestoresCanceledAttendance(@TempDir Path temp) throws Exception {
     try (Fixture fixture = new Fixture(temp.resolve("reversal-packages.sqlite"))) {
@@ -121,6 +161,10 @@ class PrepaidPackagesSQLiteTest {
     final UUID clientId = UUID.randomUUID();
 
     Fixture(Path path) throws Exception {
+      this(path, Clock.fixed(NOW, ZoneId.of("America/Manaus")));
+    }
+
+    Fixture(Path path, Clock clock) throws Exception {
       database = LocalDatabaseSession.open(path);
       unitOfWork = new SqliteUnitOfWork(database.connection());
       audit = new SqliteAuditRepository(database.connection(), unitOfWork);
@@ -159,7 +203,7 @@ class PrepaidPackagesSQLiteTest {
               new AuthorizationService(sessionContext()),
               audit,
               STATION,
-              Clock.fixed(NOW, ZoneId.of("America/Manaus")));
+              clock);
       professionalId = insertProfessional();
       insertClient();
       insertService();
