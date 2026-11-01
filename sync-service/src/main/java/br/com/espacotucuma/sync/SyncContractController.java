@@ -5,6 +5,7 @@ import br.com.espacotucuma.sync.contract.BackupRequest;
 import br.com.espacotucuma.sync.contract.OperationResult;
 import br.com.espacotucuma.sync.contract.OperationsRequest;
 import br.com.espacotucuma.sync.contract.OperationsResponse;
+import br.com.espacotucuma.sync.contract.OperationsStatusResponse;
 import br.com.espacotucuma.sync.contract.RestoreRequest;
 import br.com.espacotucuma.sync.contract.SyncContract;
 import br.com.espacotucuma.sync.contract.SyncContractValidator;
@@ -13,6 +14,7 @@ import br.com.espacotucuma.sync.contract.SyncStatusResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -70,6 +72,47 @@ class SyncContractController {
             establishmentId,
             deviceId);
     return new OperationsResponse(SyncContract.VERSION, checkpoint, List.copyOf(results));
+  }
+
+  @GetMapping("/operations/status")
+  OperationsStatusResponse operationStatus(
+      @RequestParam("ids") List<UUID> ids, HttpServletRequest request) {
+    if (ids.isEmpty() || ids.size() > 20) {
+      throw new IllegalArgumentException("A consulta deve conter de 1 a 20 operações.");
+    }
+    var establishmentId = (UUID) request.getAttribute(SyncAuthenticationFilter.ESTABLISHMENT_ID);
+    var deviceId = (UUID) request.getAttribute(SyncAuthenticationFilter.DEVICE_ID);
+    List<OperationResult> results =
+        jdbc.query(
+            "SELECT id::text AS operation_id, resultado_estado, "
+                + "COALESCE((resultado->>'remoteVersion')::bigint, 0) AS remote_version "
+                + "FROM operacao_recebida WHERE estabelecimento_id = ? AND dispositivo_id = ? "
+                + "AND id IN ("
+                + String.join(",", java.util.Collections.nCopies(ids.size(), "?"))
+                + ")",
+            (rs, rowNum) -> {
+              var outcome = rs.getString("resultado_estado");
+              return new OperationResult(
+                  UUID.fromString(rs.getString("operation_id")),
+                  switch (outcome) {
+                    case "ACEITA" -> OperationResult.Outcome.ACCEPTED;
+                    case "REJEITADA" -> OperationResult.Outcome.REJECTED;
+                    case "CONFLITO" -> OperationResult.Outcome.CONFLICT;
+                    default -> throw new IllegalStateException("Resultado remoto desconhecido.");
+                  },
+                  rs.getLong("remote_version"),
+                  "ACEITA".equals(outcome) ? null : SyncErrorCode.CONFLICT);
+            },
+            queryArguments(establishmentId, deviceId, ids));
+    return new OperationsStatusResponse(SyncContract.VERSION, results);
+  }
+
+  private static Object[] queryArguments(UUID establishmentId, UUID deviceId, List<UUID> ids) {
+    Object[] arguments = new Object[ids.size() + 2];
+    arguments[0] = establishmentId;
+    arguments[1] = deviceId;
+    for (int index = 0; index < ids.size(); index++) arguments[index + 2] = ids.get(index);
+    return arguments;
   }
 
   @GetMapping("/changes")

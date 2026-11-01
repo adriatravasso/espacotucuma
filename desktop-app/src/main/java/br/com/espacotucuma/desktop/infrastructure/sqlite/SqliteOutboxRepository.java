@@ -85,7 +85,7 @@ public final class SqliteOutboxRepository implements OutboxRepository {
               "SELECT id, entidade, entidade_id, tipo_operacao, chave_idempotencia, payload_json, "
                   + "payload_versao, versao_esperada, origem_estacao_id, criada_em_utc, tentativas "
                   + "FROM operacao_pendente WHERE estado = 'PENDENTE' "
-                  + "ORDER BY criada_em_utc, id LIMIT ?";
+                  + "ORDER BY rowid LIMIT ?";
           try (PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.setInt(1, limit);
             try (ResultSet result = statement.executeQuery()) {

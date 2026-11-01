@@ -32,6 +32,7 @@ class SyncContractVersionConfiguration implements WebMvcConfigurer {
         Set.of(
             "/sync/status",
             "/sync/operations",
+            "/sync/operations/status",
             "/sync/changes",
             "/sync/backup",
             "/sync/backups",

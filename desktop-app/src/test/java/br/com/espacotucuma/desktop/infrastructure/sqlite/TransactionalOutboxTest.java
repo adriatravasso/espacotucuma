@@ -16,6 +16,7 @@ import br.com.espacotucuma.desktop.application.identity.UserRole;
 import br.com.espacotucuma.desktop.application.outbox.PendingOperation;
 import br.com.espacotucuma.desktop.application.outbox.ServerConfirmation;
 import br.com.espacotucuma.desktop.infrastructure.security.Pbkdf2PasswordHasher;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.ResultSet;
@@ -103,6 +104,29 @@ class TransactionalOutboxTest {
       assertEquals(0, scalarInt(database.connection(), "SELECT count(*) FROM cliente"));
       assertEquals(0, scalarInt(database.connection(), "SELECT count(*) FROM operacao_pendente"));
       assertTrue(database.connection().getAutoCommit());
+    }
+  }
+
+  @Test
+  void pendingOrderFollowsLocalInsertionEvenWhenDeviceClockMovesBackward(@TempDir Path temp)
+      throws Exception {
+    try (LocalDatabaseSession database =
+        LocalDatabaseSession.open(temp.resolve("insertion-order.sqlite"))) {
+      SqliteUnitOfWork unitOfWork = new SqliteUnitOfWork(database.connection());
+      SqliteOutboxRepository outbox = new SqliteOutboxRepository(database.connection(), unitOfWork);
+      PendingOperation first = pendingOperation(1, NOW.plusSeconds(3600));
+      PendingOperation second = pendingOperation(2, NOW.minusSeconds(3600));
+
+      unitOfWork.execute(
+          () -> {
+            outbox.enqueue(first);
+            outbox.enqueue(second);
+            return null;
+          });
+
+      assertEquals(
+          List.of(first.id(), second.id()),
+          outbox.findPending(10).stream().map(PendingOperation::id).toList());
     }
   }
 
@@ -240,5 +264,21 @@ class TransactionalOutboxTest {
         ResultSet result = statement.executeQuery(sql)) {
       return result.next() ? result.getString(1) : null;
     }
+  }
+
+  private PendingOperation pendingOperation(int sequence, Instant createdAt) {
+    UUID id = UUID.nameUUIDFromBytes(("pending-" + sequence).getBytes(StandardCharsets.UTF_8));
+    return new PendingOperation(
+        id,
+        "cliente",
+        UUID.nameUUIDFromBytes(("entity-" + sequence).getBytes(StandardCharsets.UTF_8)),
+        "CLIENTE_CRIADO",
+        id.toString(),
+        "{}",
+        1,
+        0,
+        STATION_ID,
+        createdAt,
+        0);
   }
 }

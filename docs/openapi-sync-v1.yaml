@@ -42,6 +42,26 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/OperationsResponse' }
         default: { $ref: '#/components/responses/ApiError' }
+  /sync/operations/status:
+    get:
+      operationId: getOperationStatuses
+      parameters:
+        - $ref: '#/components/parameters/ContractVersion'
+        - name: ids
+          in: query
+          required: true
+          schema:
+            type: array
+            minItems: 1
+            maxItems: 20
+            items: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Persisted results for operations already received by this device.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OperationsStatusResponse' }
+        default: { $ref: '#/components/responses/ApiError' }
   /sync/changes:
     get:
       operationId: getSyncChanges
@@ -177,6 +197,14 @@ components:
       properties:
         contractVersion: { type: integer, const: 1 }
         checkpoint: { type: integer, format: int64, minimum: 0 }
+        results:
+          type: array
+          items: { $ref: '#/components/schemas/OperationResult' }
+    OperationsStatusResponse:
+      type: object
+      required: [contractVersion, results]
+      properties:
+        contractVersion: { type: integer, const: 1 }
         results:
           type: array
           items: { $ref: '#/components/schemas/OperationResult' }
