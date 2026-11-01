@@ -3,6 +3,7 @@ package br.com.espacotucuma.desktop;
 import br.com.espacotucuma.desktop.application.attendance.MaintainAttendanceUseCase;
 import br.com.espacotucuma.desktop.application.client.MaintainClientUseCase;
 import br.com.espacotucuma.desktop.application.client.RegisterClientUseCase;
+import br.com.espacotucuma.desktop.application.commission.CloseCommissionCompetencyUseCase;
 import br.com.espacotucuma.desktop.application.commission.CommissionService;
 import br.com.espacotucuma.desktop.application.commission.MaintainCommissionRuleUseCase;
 import br.com.espacotucuma.desktop.application.config.DesktopEnvironment;
@@ -21,6 +22,7 @@ import br.com.espacotucuma.desktop.application.identity.SessionContext;
 import br.com.espacotucuma.desktop.application.port.attendance.AttendanceRepository;
 import br.com.espacotucuma.desktop.application.port.client.ClientRepository;
 import br.com.espacotucuma.desktop.application.port.commission.CommissionRuleRepository;
+import br.com.espacotucuma.desktop.application.port.commission.CommissionStatementRepository;
 import br.com.espacotucuma.desktop.application.port.finance.CashTurnRepository;
 import br.com.espacotucuma.desktop.application.port.finance.PaymentRepository;
 import br.com.espacotucuma.desktop.application.port.prepaid.PrepaidPackageRepository;
@@ -39,6 +41,7 @@ import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteAuditRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteCashTurnRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteClientRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteCommissionRuleRepository;
+import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteCommissionStatementRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteInitialSetupRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteLocalCredentialRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteOpenCashTurnRepository;
@@ -74,6 +77,7 @@ public final class DesktopRuntime implements AutoCloseable {
   private final CommissionRuleRepository commissionRules;
   private final MaintainCommissionRuleUseCase maintainCommissionRule;
   private final CommissionService commissions;
+  private final CloseCommissionCompetencyUseCase closeCommissionCompetency;
   private final PrepaidPackageRepository prepaidPackages;
   private final MaintainPrepaidPackagesUseCase maintainPrepaidPackages;
   private final AppointmentRepository appointments;
@@ -106,6 +110,7 @@ public final class DesktopRuntime implements AutoCloseable {
       CommissionRuleRepository commissionRules,
       MaintainCommissionRuleUseCase maintainCommissionRule,
       CommissionService commissions,
+      CloseCommissionCompetencyUseCase closeCommissionCompetency,
       PrepaidPackageRepository prepaidPackages,
       MaintainPrepaidPackagesUseCase maintainPrepaidPackages,
       AppointmentRepository appointments,
@@ -136,6 +141,7 @@ public final class DesktopRuntime implements AutoCloseable {
     this.commissionRules = commissionRules;
     this.maintainCommissionRule = maintainCommissionRule;
     this.commissions = commissions;
+    this.closeCommissionCompetency = closeCommissionCompetency;
     this.prepaidPackages = prepaidPackages;
     this.maintainPrepaidPackages = maintainPrepaidPackages;
     this.appointments = appointments;
@@ -231,6 +237,16 @@ public final class DesktopRuntime implements AutoCloseable {
               stationId);
       CommissionService commissions =
           new CommissionService(commissionRules, unitOfWork, authorization);
+      CommissionStatementRepository commissionStatements =
+          new SqliteCommissionStatementRepository(database.connection(), unitOfWork);
+      CloseCommissionCompetencyUseCase closeCommissionCompetency =
+          new CloseCommissionCompetencyUseCase(
+              unitOfWork,
+              commissionStatements,
+              new SqliteOutboxRepository(database.connection(), unitOfWork),
+              authorization,
+              audit,
+              stationId);
       PrepaidPackageRepository prepaidPackages =
           new SqlitePrepaidPackageRepository(database.connection(), unitOfWork);
       MaintainPrepaidPackagesUseCase maintainPrepaidPackages =
@@ -338,6 +354,7 @@ public final class DesktopRuntime implements AutoCloseable {
           commissionRules,
           maintainCommissionRule,
           commissions,
+          closeCommissionCompetency,
           prepaidPackages,
           maintainPrepaidPackages,
           appointments,
@@ -407,6 +424,10 @@ public final class DesktopRuntime implements AutoCloseable {
 
   public CommissionService commissions() {
     return commissions;
+  }
+
+  public CloseCommissionCompetencyUseCase closeCommissionCompetency() {
+    return closeCommissionCompetency;
   }
 
   public PrepaidPackageRepository prepaidPackages() {

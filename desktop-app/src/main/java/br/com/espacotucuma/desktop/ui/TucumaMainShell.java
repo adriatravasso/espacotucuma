@@ -38,6 +38,7 @@ final class TucumaMainShell {
   private final Parent packagesView;
   private final Parent appointmentsView;
   private final Parent cashView;
+  private final Parent reportsView;
   private final Timeline statusRefresh;
   private Runnable logoutAction = () -> {};
   private String activeModule = "Início";
@@ -107,6 +108,26 @@ final class TucumaMainShell {
       Parent packagesView,
       Parent appointmentsView,
       Parent cashView) {
+    this(
+        statusLoader,
+        clientsView,
+        professionalsView,
+        servicesView,
+        packagesView,
+        appointmentsView,
+        cashView,
+        null);
+  }
+
+  TucumaMainShell(
+      Supplier<ProtectionStatus> statusLoader,
+      Parent clientsView,
+      Parent professionalsView,
+      Parent servicesView,
+      Parent packagesView,
+      Parent appointmentsView,
+      Parent cashView,
+      Parent reportsView) {
     this.statusLoader = statusLoader;
     this.clientsView = clientsView;
     this.professionalsView = professionalsView;
@@ -114,6 +135,7 @@ final class TucumaMainShell {
     this.packagesView = packagesView;
     this.appointmentsView = appointmentsView;
     this.cashView = cashView;
+    this.reportsView = reportsView;
     root.setTop(new VBox(createMenuBar(), createToolBar()));
     root.setLeft(createNavigation());
     root.setCenter(workArea);
@@ -170,6 +192,10 @@ final class TucumaMainShell {
     }
     if (activeModule.equals("Caixa") && cashView instanceof CashRegisterPane cashPane) {
       cashPane.refresh();
+    }
+    if (activeModule.equals("Relatórios")
+        && reportsView instanceof CommissionStatementPane commissionPane) {
+      commissionPane.refresh();
     }
   }
 
@@ -297,6 +323,10 @@ final class TucumaMainShell {
     } else if (module.equals("Caixa") && cashView instanceof CashRegisterPane cashPane) {
       cashPane.refresh();
       workArea.setCenter(cashPane);
+    } else if (module.equals("Relatórios")
+        && reportsView instanceof CommissionStatementPane commissionPane) {
+      commissionPane.refresh();
+      workArea.setCenter(commissionPane);
     } else {
       workArea.setCenter(placeholder);
     }

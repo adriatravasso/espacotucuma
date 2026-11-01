@@ -67,6 +67,34 @@ class CommissionCalculatorTest {
     assertThrows(ArithmeticException.class, () -> Money.of("0.001"));
   }
 
+  @Test
+  void allocatesAttendanceDiscountInCentsDeterministicallyAcrossServiceLines() {
+    UUID attendanceId = UUID.fromString("00000000-0000-0000-0000-000000000001");
+    CommissionCandidate first = candidate("00000000-0000-0000-0000-000000000003", attendanceId, 1);
+    CommissionCandidate second = candidate("00000000-0000-0000-0000-000000000002", attendanceId, 1);
+    CommissionCandidate third = candidate("00000000-0000-0000-0000-000000000004", attendanceId, 1);
+
+    var allocation =
+        CloseCommissionCompetencyUseCase.allocateDiscounts(java.util.List.of(first, second, third));
+
+    assertEquals(0, allocation.get(first.serviceLineId()));
+    assertEquals(1, allocation.get(second.serviceLineId()));
+    assertEquals(0, allocation.get(third.serviceLineId()));
+  }
+
+  private CommissionCandidate candidate(String id, UUID attendanceId, long cents) {
+    return new CommissionCandidate(
+        UUID.fromString(id),
+        attendanceId,
+        UUID.fromString("00000000-0000-0000-0000-000000000010"),
+        "Profissional",
+        "Serviço",
+        NOW,
+        cents,
+        1,
+        5000);
+  }
+
   private ServiceCommissionRule rule(int percentage, boolean active) {
     return new ServiceCommissionRule(
         UUID.fromString("2e3b78dd-6cfe-4ad4-baa8-0e027108dcef"),
