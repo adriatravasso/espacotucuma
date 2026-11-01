@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import br.com.espacotucuma.desktop.application.attendance.MaintainAttendanceUseCase;
+import br.com.espacotucuma.desktop.application.finance.ManageCashTurnUseCase;
+import br.com.espacotucuma.desktop.application.finance.PaymentMethod;
 import br.com.espacotucuma.desktop.application.finance.RegisterPaymentUseCase;
 import br.com.espacotucuma.desktop.application.identity.AuthenticatedUser;
 import br.com.espacotucuma.desktop.application.identity.AuthorizationService;
@@ -16,11 +18,13 @@ import br.com.espacotucuma.desktop.application.port.prepaid.PrepaidPackageReposi
 import br.com.espacotucuma.desktop.application.port.professional.ProfessionalRepository;
 import br.com.espacotucuma.desktop.application.port.service.ServiceRepository;
 import br.com.espacotucuma.desktop.application.scheduling.MaintainAppointmentUseCase;
+import br.com.espacotucuma.desktop.domain.money.Money;
 import br.com.espacotucuma.desktop.infrastructure.security.Pbkdf2PasswordHasher;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.LocalDatabaseSession;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteAppointmentRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteAttendanceRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteAuditRepository;
+import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteCashTurnRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteClientRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteCommissionRuleRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteInitialSetupRepository;
@@ -341,6 +345,56 @@ class AppointmentRegistryPaneTest {
     }
   }
 
+  @Test
+  @Timeout(60)
+  void opensRegistersPaymentClosesAndShowsPersistedReconciliation(FxRobot robot, @TempDir Path temp)
+      throws Exception {
+    try (Fixture fixture = new Fixture(temp.resolve("cash-close-ui.sqlite"))) {
+      var appointment =
+          fixture.maintain.create(
+              fixture.clientId,
+              fixture.professionalId,
+              fixture.serviceId,
+              LocalDateTime.of(MONDAY, LocalTime.of(9, 0)),
+              null);
+      fixture.maintain.confirm(appointment.id());
+      var attendance = fixture.attendance.startFromAppointment(appointment.id());
+      fixture.attendance.addService(attendance.id(), fixture.serviceId, 1);
+      fixture.attendance.complete(attendance.id());
+
+      CashRegisterPane pane = new CashRegisterPane(fixture.cashTurns, fixture.authorization);
+      robot.interact(() -> stage.setScene(new Scene(pane, 1180, 720)));
+      robot.interact(
+          () -> robot.lookup("#cashOpeningAmount").queryTextInputControl().setText("10,00"));
+      Platform.runLater(() -> robot.lookup("#cashOpen").queryButton().fire());
+      WaitForAsyncUtils.waitFor(
+          8, TimeUnit.SECONDS, () -> pane.stateLabel().getText().contains("Caixa aberto"));
+
+      fixture.payments.register(
+          attendance.id(), PaymentMethod.DINHEIRO, Money.of("50.00"), "cash-close-ui-payment");
+      robot.interact(
+          () -> {
+            robot.lookup("#cashCountCash").queryTextInputControl().setText("60,00");
+            robot.lookup("#cashCountPix").queryTextInputControl().setText("0,00");
+            robot.lookup("#cashCountCard").queryTextInputControl().setText("0,00");
+          });
+      Platform.runLater(() -> robot.lookup("#cashClose").queryButton().fire());
+      WaitForAsyncUtils.waitFor(
+          8, TimeUnit.SECONDS, () -> pane.stateLabel().getText().contains("Último turno fechado"));
+      assertTrue(pane.summaryLabel().getText().contains("esperado R$ 60,00"));
+      assertTrue(pane.summaryLabel().getText().contains("conferido R$ 60,00"));
+      assertEquals(3, fixture.scalar("SELECT COUNT(*) FROM conferencia_caixa"));
+      assertEquals(
+          6_000,
+          fixture.scalar("SELECT esperado_centavos FROM conferencia_caixa WHERE forma='DINHEIRO'"));
+      assertEquals(
+          6_000,
+          fixture.scalar(
+              "SELECT conferido_centavos FROM conferencia_caixa WHERE forma='DINHEIRO'"));
+      assertEquals(1, pane.movementTable().getItems().size());
+    }
+  }
+
   private void waitForRows(FxRobot robot, int count) throws Exception {
     WaitForAsyncUtils.waitFor(
         10,
@@ -360,6 +414,7 @@ class AppointmentRegistryPaneTest {
     final ServiceRepository services;
     final MaintainAttendanceUseCase attendance;
     final RegisterPaymentUseCase payments;
+    final ManageCashTurnUseCase cashTurns;
     final PrepaidPackageRepository prepaidPackages;
     final AuthorizationService authorization;
     final MaintainAppointmentUseCase maintain;
@@ -438,6 +493,15 @@ class AppointmentRegistryPaneTest {
               outbox,
               authorization,
               audit,
+              STATION,
+              Clock.fixed(NOW, ZoneId.of("America/Manaus")));
+      cashTurns =
+          new ManageCashTurnUseCase(
+              unit,
+              new SqliteCashTurnRepository(database.connection(), unit),
+              new SqliteOutboxRepository(database.connection(), unit),
+              new SqliteAuditRepository(database.connection(), unit),
+              authorization,
               STATION,
               Clock.fixed(NOW, ZoneId.of("America/Manaus")));
     }

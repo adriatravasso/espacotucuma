@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import br.com.espacotucuma.desktop.application.attendance.AttendanceStatus;
 import br.com.espacotucuma.desktop.application.attendance.MaintainAttendanceUseCase;
+import br.com.espacotucuma.desktop.application.finance.CashMovementType;
+import br.com.espacotucuma.desktop.application.finance.ManageCashTurnUseCase;
 import br.com.espacotucuma.desktop.application.finance.PaymentMethod;
 import br.com.espacotucuma.desktop.application.finance.RegisterPaymentUseCase;
 import br.com.espacotucuma.desktop.application.identity.AuthenticatedUser;
@@ -31,6 +33,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.ZoneId;
+import java.util.EnumMap;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
@@ -413,6 +416,98 @@ class AppointmentSchedulingSQLiteTest {
   }
 
   @Test
+  void opensRejectsDuplicateReconcilesAndAuditsCashTurn(@TempDir Path temp) throws Exception {
+    try (Fixture fixture = new Fixture(temp.resolve("cash-turn.sqlite"))) {
+      var opened = fixture.cashTurns.open(1_000);
+      assertThrows(IllegalStateException.class, () -> fixture.cashTurns.open(500));
+      fixture.cashTurns.recordMovement(CashMovementType.SUPRIMENTO, 500, "Troco recebido");
+      fixture.cashTurns.recordMovement(CashMovementType.SANGRIA, 200, "Depósito bancário");
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> fixture.cashTurns.recordMovement(CashMovementType.SAIDA, 1_301, "Despesa"));
+
+      EnumMap<PaymentMethod, Long> counted = new EnumMap<>(PaymentMethod.class);
+      counted.put(PaymentMethod.DINHEIRO, 1_299L);
+      counted.put(PaymentMethod.PIX, 0L);
+      counted.put(PaymentMethod.CARTAO, 0L);
+      assertThrows(IllegalArgumentException.class, () -> fixture.cashTurns.close(counted, ""));
+      assertTrue(fixture.cashTurns.currentTurn().orElseThrow().open());
+      fixture.execute(
+          "CREATE TRIGGER trg_test_reject_cash_close_audit BEFORE INSERT ON evento_auditoria "
+              + "WHEN NEW.acao='CAIXA_FECHADO' BEGIN SELECT RAISE(ABORT, 'auditoria rejeitada'); END");
+      assertThrows(
+          IllegalStateException.class,
+          () -> fixture.cashTurns.close(counted, "Diferença de R$ 0,01"));
+      assertTrue(fixture.cashTurns.currentTurn().orElseThrow().open());
+      assertEquals(0, fixture.scalar("SELECT COUNT(*) FROM conferencia_caixa"));
+      assertEquals(
+          0,
+          fixture.scalar(
+              "SELECT COUNT(*) FROM operacao_pendente WHERE entidade='caixa_turno' AND tipo_operacao='CAIXA_FECHADO'"));
+      fixture.execute("DROP TRIGGER trg_test_reject_cash_close_audit");
+
+      var close = fixture.cashTurns.close(counted, "Diferença de R$ 0,01");
+      var cashResult =
+          close.stream()
+              .filter(total -> total.method() == PaymentMethod.DINHEIRO)
+              .findFirst()
+              .orElseThrow();
+      assertEquals(1_300, cashResult.expectedCents());
+      assertEquals(1_299, cashResult.countedCents());
+      assertEquals(3, fixture.cashTurns.latestClosing(opened.id()).size());
+      assertEquals(3, fixture.scalar("SELECT COUNT(*) FROM conferencia_caixa"));
+      assertEquals(
+          1,
+          fixture.scalar(
+              "SELECT COUNT(*) FROM operacao_pendente WHERE entidade='caixa_turno' AND tipo_operacao='CAIXA_FECHADO'"));
+      assertEquals(
+          1,
+          fixture.scalar(
+              "SELECT COUNT(*) FROM evento_auditoria WHERE acao='CAIXA_FECHADO' AND motivo='Diferença de R$ 0,01'"));
+      assertThrows(
+          IllegalStateException.class,
+          () ->
+              fixture.cashTurns.recordMovement(
+                  CashMovementType.SUPRIMENTO, 100, "Após fechamento"));
+
+      fixture.useReceptionRole();
+      assertThrows(
+          AuthorizationException.class,
+          () -> fixture.cashTurns.reopen(opened.id(), "Ajuste autorizado"));
+      fixture.restoreAdministrator();
+      fixture.cashTurns.reopen(opened.id(), "Reabertura autorizada");
+      assertTrue(fixture.cashTurns.currentTurn().orElseThrow().open());
+      assertEquals(
+          1,
+          fixture.scalar(
+              "SELECT COUNT(*) FROM evento_auditoria WHERE acao='CAIXA_REABERTO' AND motivo='Reabertura autorizada'"));
+    }
+  }
+
+  @Test
+  void closedCashTurnAndMovementsSurviveDatabaseRestart(@TempDir Path temp) throws Exception {
+    Path databaseFile = temp.resolve("cash-restart.sqlite");
+    UUID turnId;
+    try (Fixture fixture = new Fixture(databaseFile)) {
+      var turn = fixture.cashTurns.open(250);
+      turnId = turn.id();
+      fixture.cashTurns.recordMovement(CashMovementType.SUPRIMENTO, 150, "Troco adicional");
+      EnumMap<PaymentMethod, Long> counted = new EnumMap<>(PaymentMethod.class);
+      counted.put(PaymentMethod.DINHEIRO, 400L);
+      counted.put(PaymentMethod.PIX, 0L);
+      counted.put(PaymentMethod.CARTAO, 0L);
+      fixture.cashTurns.close(counted, null);
+    }
+    try (LocalDatabaseSession reopened = LocalDatabaseSession.open(databaseFile)) {
+      SqliteUnitOfWork unit = new SqliteUnitOfWork(reopened.connection());
+      SqliteCashTurnRepository turns = new SqliteCashTurnRepository(reopened.connection(), unit);
+      assertEquals(1, turns.findMovements(turnId).size());
+      assertEquals(3, turns.findLatestClosing(turnId).size());
+      assertEquals(400L, turns.findById(turnId).orElseThrow().closingCents());
+    }
+  }
+
+  @Test
   void concurrentCreatesOnSingleConnectionCannotClaimSameSlot(@TempDir Path temp) throws Exception {
     try (Fixture fixture = new Fixture(temp.resolve("schedule-concurrent.sqlite"))) {
       CountDownLatch ready = new CountDownLatch(2);
@@ -481,6 +576,7 @@ class AppointmentSchedulingSQLiteTest {
     final MaintainAppointmentUseCase maintain;
     final MaintainAttendanceUseCase attendance;
     final RegisterPaymentUseCase payments;
+    final ManageCashTurnUseCase cashTurns;
     final SessionContext sessions;
     final AuthorizationService authorization;
     final UUID adminId;
@@ -558,6 +654,15 @@ class AppointmentSchedulingSQLiteTest {
               outbox,
               authorization,
               audit,
+              STATION,
+              Clock.fixed(NOW, ZoneId.of("America/Manaus")));
+      cashTurns =
+          new ManageCashTurnUseCase(
+              unitOfWork,
+              new SqliteCashTurnRepository(database.connection(), unitOfWork),
+              outbox,
+              audit,
+              authorization,
               STATION,
               Clock.fixed(NOW, ZoneId.of("America/Manaus")));
     }
@@ -711,6 +816,11 @@ class AppointmentSchedulingSQLiteTest {
     void useReceptionRole() {
       sessions.establish(
           new AuthenticatedUser(UUID.randomUUID(), "Recepção", "recepcao", UserRole.RECEPCAO));
+    }
+
+    void restoreAdministrator() {
+      sessions.establish(
+          new AuthenticatedUser(adminId, "Admin Agenda", "admin", UserRole.ADMINISTRADOR));
     }
 
     int scalar(String sql) throws Exception {
