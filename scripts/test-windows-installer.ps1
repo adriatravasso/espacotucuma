@@ -41,8 +41,7 @@ function Find-PackagedExecutable {
         (Join-Path $env:LOCALAPPDATA 'EspacoTucuma'),
         (Join-Path $env:LOCALAPPDATA 'Tucumã — Gestão'),
         (Join-Path $env:LOCALAPPDATA 'Programs\EspacoTucuma'),
-        (Join-Path $env:LOCALAPPDATA 'Programs\Tucumã — Gestão'),
-        $env:LOCALAPPDATA
+        (Join-Path $env:LOCALAPPDATA 'Programs\Tucumã — Gestão')
     )
     if ($installerLog -and (Test-Path $installerLog)) {
         $roots = @(
@@ -68,10 +67,24 @@ function Find-PackagedExecutable {
         $match = Get-ChildItem -LiteralPath $root -Filter "$appName.exe" -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($match) { return $match.FullName }
     }
+
+    $startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
+    if (Test-Path $startMenu) {
+        $shell = New-Object -ComObject WScript.Shell
+        foreach ($link in Get-ChildItem -LiteralPath $startMenu -Filter '*.lnk' -File -Recurse -ErrorAction SilentlyContinue) {
+            if ($link.BaseName -ne $appName) { continue }
+            $target = $shell.CreateShortcut($link.FullName).TargetPath
+            if ($target -and (Test-Path -LiteralPath $target)) { return $target }
+        }
+    }
+
     $installProperties = if ($installerLog -and (Test-Path $installerLog)) {
         Get-Content -LiteralPath $installerLog | Select-String -Pattern 'Property\(S\): (?:INSTALLDIR|APPLICATIONFOLDER) = .+'
     }
-    throw "Executável instalado não localizado. Diretórios verificados: $($roots -join '; '). Propriedades MSI: $($installProperties -join '; ')"
+    $directoryContents = if (Test-Path $installDirectory) {
+        (Get-ChildItem -LiteralPath $installDirectory -Force | Select-Object -ExpandProperty FullName) -join '; '
+    }
+    throw "Executável instalado não localizado. Diretórios verificados: $($roots -join '; '). Conteúdo do diretório MSI: $directoryContents. Propriedades MSI: $($installProperties -join '; ')"
 }
 
 function Invoke-PackagedSmoke {
