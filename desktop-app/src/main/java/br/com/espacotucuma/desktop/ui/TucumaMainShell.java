@@ -2,9 +2,11 @@ package br.com.espacotucuma.desktop.ui;
 
 import br.com.espacotucuma.desktop.application.ProtectionStatus;
 import br.com.espacotucuma.desktop.application.port.synchronization.ManualSynchronizationPort;
+import br.com.espacotucuma.desktop.application.port.synchronization.RemoteBackupHistoryPort;
 import br.com.espacotucuma.desktop.application.port.synchronization.SynchronizationProgress;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -14,15 +16,19 @@ import javafx.animation.Timeline;
 import javafx.concurrent.Task;
 import javafx.geometry.Insets;
 import javafx.scene.Parent;
-import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
+import javafx.scene.control.ButtonType;
+import javafx.scene.control.Dialog;
 import javafx.scene.control.Label;
+import javafx.scene.control.ListView;
 import javafx.scene.control.Menu;
 import javafx.scene.control.MenuBar;
 import javafx.scene.control.MenuItem;
+import javafx.scene.control.ProgressBar;
 import javafx.scene.control.SeparatorMenuItem;
 import javafx.scene.control.ToolBar;
 import javafx.scene.layout.BorderPane;
+import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
 import javafx.util.Duration;
 
@@ -49,11 +55,25 @@ final class TucumaMainShell {
   private final Parent conflictsView;
   private final Timeline statusRefresh;
   private final ManualSynchronizationPort manualSynchronization;
+  private final RemoteBackupHistoryPort remoteBackupHistory;
   private final AtomicBoolean synchronizationRunning = new AtomicBoolean();
   private final AtomicReference<Thread> synchronizationWorker = new AtomicReference<>();
   private Button synchronizationButton;
   private MenuItem synchronizationMenuItem;
   private Label synchronizationProgress;
+  private Dialog<Void> synchronizationDialog;
+  private Label dialogProtection;
+  private Label dialogLastSync;
+  private Label dialogLastBackup;
+  private Label dialogState;
+  private Label dialogNetwork;
+  private Label dialogDetail;
+  private Label dialogRecovery;
+  private ProgressBar dialogProgressBar;
+  private Button dialogSyncButton;
+  private Button dialogRetryButton;
+  private Button dialogBackupsButton;
+  private ListView<String> dialogBackups;
   private Runnable logoutAction = () -> {};
   private String activeModule = "Início";
 
@@ -224,6 +244,8 @@ final class TucumaMainShell {
     this.reportsView = reportsView;
     this.inventoryView = inventoryView;
     this.manualSynchronization = manualSynchronization;
+    this.remoteBackupHistory =
+        manualSynchronization instanceof RemoteBackupHistoryPort history ? history : null;
     this.conflictsView = conflictsView;
     root.setTop(new VBox(createMenuBar(), createToolBar()));
     root.setLeft(createNavigation());
@@ -372,13 +394,28 @@ final class TucumaMainShell {
       synchronizationButton.setDisable(true);
       synchronizationMenuItem.setText("Cancelando sincronização…");
       synchronizationMenuItem.setDisable(true);
+      if (dialogState != null)
+        dialogState.setText("Cancelamento solicitado; aguardando retorno seguro...");
+      if (dialogSyncButton != null) {
+        dialogSyncButton.setText("Cancelando…");
+        dialogSyncButton.setDisable(true);
+      }
       Thread worker = synchronizationWorker.get();
       if (worker != null) worker.interrupt();
       return;
     }
+    ensureSynchronizationDialog();
+    synchronizationDialog.show();
     synchronizationButton.setText("Cancelar");
     synchronizationMenuItem.setText("Cancelar sincronização");
     synchronizationProgress.setText("Preparando sincronização manual...");
+    dialogSyncButton.setText("Cancelar sincronização");
+    dialogRetryButton.setDisable(true);
+    dialogRetryButton.setVisible(false);
+    dialogRecovery.setText("");
+    dialogProgressBar.setProgress(ProgressBar.INDETERMINATE_PROGRESS);
+    dialogState.setText("Sincronização em andamento");
+    updateDialogProtection();
     AtomicReference<SynchronizationProgress> outcome =
         new AtomicReference<>(
             SynchronizationProgress.of(SynchronizationProgress.State.VERIFYING_ACCESS));
@@ -390,6 +427,7 @@ final class TucumaMainShell {
                 progress -> {
                   outcome.set(progress);
                   updateMessage(progress.detail());
+                  javafx.application.Platform.runLater(() -> showSynchronizationProgress(progress));
                 });
             return null;
           }
@@ -403,22 +441,7 @@ final class TucumaMainShell {
           finishSynchronization();
           refreshStatus();
           SynchronizationProgress result = outcome.get();
-          Alert alert =
-              new Alert(
-                  Alert.AlertType.INFORMATION,
-                  result.detail()
-                      + "\nEnviadas: "
-                      + result.sentOperations()
-                      + " | Recebidas: "
-                      + result.receivedChanges()
-                      + " | Conflitos: "
-                      + result.conflicts()
-                      + " | Checkpoint: "
-                      + result.checkpoint());
-          alert.setTitle("Espaço Tucumã");
-          alert.setHeaderText(result.state().label());
-          TucumaTheme.apply(alert.getDialogPane());
-          alert.show();
+          showSynchronizationResult(result, null);
         });
     task.setOnFailed(
         event -> {
@@ -427,16 +450,7 @@ final class TucumaMainShell {
           Throwable failure = task.getException();
           SynchronizationProgress result = outcome.get();
           synchronizationProgress.setText(result.detail());
-          Alert alert =
-              new Alert(
-                  Alert.AlertType.ERROR,
-                  failure == null || failure.getMessage() == null
-                      ? result.detail()
-                      : result.detail() + "\n" + failure.getMessage());
-          alert.setTitle("Espaço Tucumã");
-          alert.setHeaderText(result.state().label());
-          TucumaTheme.apply(alert.getDialogPane());
-          alert.show();
+          showSynchronizationResult(result, failure);
         });
     Thread worker = new Thread(task, "tucuma-manual-sync");
     worker.setDaemon(true);
@@ -451,6 +465,187 @@ final class TucumaMainShell {
     synchronizationMenuItem.setDisable(false);
     synchronizationButton.setText("Sincronizar");
     synchronizationMenuItem.setText("Sincronizar");
+    if (dialogSyncButton != null) {
+      dialogSyncButton.setDisable(false);
+      dialogSyncButton.setText("Sincronizar novamente");
+    }
+    if (dialogRetryButton != null) dialogRetryButton.setDisable(false);
+  }
+
+  private void ensureSynchronizationDialog() {
+    if (synchronizationDialog != null) return;
+    synchronizationDialog = new Dialog<>();
+    synchronizationDialog.setTitle("Sincronização e backup remoto");
+    synchronizationDialog.setHeaderText("Estado local e proteção remota");
+    synchronizationDialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+    dialogProtection = new Label();
+    dialogProtection.setId("syncDialogProtection");
+    dialogLastSync = new Label();
+    dialogLastSync.setId("syncDialogLastSync");
+    dialogLastBackup = new Label();
+    dialogLastBackup.setId("syncDialogLastBackup");
+    dialogState = new Label("Pronto para sincronizar");
+    dialogState.setId("syncDialogState");
+    dialogNetwork = new Label("Serviço remoto: não consultado");
+    dialogNetwork.setId("syncDialogNetwork");
+    dialogDetail = new Label("Salvar grava os dados localmente. Sincronizar envia as pendências.");
+    dialogDetail.setId("syncDialogDetail");
+    dialogDetail.setWrapText(true);
+    dialogRecovery = new Label();
+    dialogRecovery.setId("syncDialogRecovery");
+    dialogRecovery.setWrapText(true);
+    dialogProgressBar = new ProgressBar(0);
+    dialogProgressBar.setId("syncDialogProgressBar");
+    dialogProgressBar.setMaxWidth(Double.MAX_VALUE);
+    dialogSyncButton = new Button("Sincronizar agora");
+    dialogSyncButton.setId("syncDialogAction");
+    dialogSyncButton.setOnAction(event -> startSynchronization());
+    dialogRetryButton = new Button("Tentar novamente");
+    dialogRetryButton.setId("syncDialogRetry");
+    dialogRetryButton.setVisible(false);
+    dialogRetryButton.setManaged(false);
+    dialogRetryButton.setOnAction(event -> startSynchronization());
+    dialogBackupsButton = new Button("Consultar backups disponíveis");
+    dialogBackupsButton.setId("syncDialogBackups");
+    dialogBackups = new ListView<>();
+    dialogBackups.setId("syncDialogBackupList");
+    dialogBackups.setPrefHeight(110);
+    boolean canQueryBackups = remoteBackupHistory != null && remoteBackupHistory.canListBackups();
+    dialogBackupsButton.setVisible(canQueryBackups);
+    dialogBackupsButton.setManaged(canQueryBackups);
+    dialogBackups.setVisible(canQueryBackups);
+    dialogBackups.setManaged(canQueryBackups);
+    dialogBackupsButton.setOnAction(event -> queryRemoteBackups());
+    HBox actions = new HBox(8, dialogSyncButton, dialogRetryButton, dialogBackupsButton);
+    VBox content =
+        new VBox(
+            8,
+            dialogProtection,
+            dialogLastSync,
+            dialogLastBackup,
+            dialogNetwork,
+            dialogState,
+            dialogDetail,
+            dialogProgressBar,
+            dialogRecovery,
+            actions,
+            new Label("Pontos remotos validados (consulta não baixa nem restaura):"),
+            dialogBackups);
+    content.setPadding(new Insets(6));
+    content.setPrefWidth(520);
+    synchronizationDialog.getDialogPane().setContent(content);
+    synchronizationDialog.setOnHidden(event -> synchronizationDialog = null);
+    updateDialogProtection();
+    TucumaTheme.apply(synchronizationDialog.getDialogPane());
+  }
+
+  private void updateDialogProtection() {
+    if (dialogProtection == null) return;
+    try {
+      ProtectionStatus status = statusLoader.get();
+      dialogProtection.setText(
+          status.protectionMessage() + " — Pendentes: " + status.pendingOperations());
+      dialogLastSync.setText(
+          "Última confirmação remota: " + display(status.lastSynchronizationAt()));
+      dialogLastBackup.setText(
+          "Último backup validado: " + display(status.lastValidatedBackupAt()));
+    } catch (RuntimeException failure) {
+      dialogProtection.setText("Estado local indisponível; dados salvos continuam no computador.");
+      dialogLastSync.setText("Última confirmação remota: indisponível");
+      dialogLastBackup.setText("Último backup validado: indisponível");
+    }
+  }
+
+  private void showSynchronizationProgress(SynchronizationProgress progress) {
+    if (synchronizationDialog == null || !synchronizationDialog.isShowing()) return;
+    dialogState.setText(progress.state().label());
+    dialogNetwork.setText(
+        switch (progress.state()) {
+          case VERIFYING_ACCESS, CHECKING_CHECKPOINT -> "Serviço remoto: verificando acesso";
+          case NO_CONNECTION -> "Serviço remoto: sem conexão";
+          case FAILED -> "Serviço remoto: falha na comunicação";
+          case CANCELLED -> "Serviço remoto: consulta cancelada";
+          default -> "Serviço remoto: conectado";
+        });
+    dialogDetail.setText(
+        progress.detail()
+            + "\nEnviadas: "
+            + progress.sentOperations()
+            + " | Recebidas: "
+            + progress.receivedChanges()
+            + " | Conflitos: "
+            + progress.conflicts()
+            + " | Checkpoint: "
+            + progress.checkpoint());
+    updateDialogProtection();
+  }
+
+  private void showSynchronizationResult(SynchronizationProgress result, Throwable failure) {
+    if (synchronizationDialog == null) return;
+    dialogState.setText(result.state().label());
+    dialogNetwork.setText(
+        switch (result.state()) {
+          case NO_CONNECTION -> "Serviço remoto: sem conexão";
+          case FAILED -> "Serviço remoto: falha na comunicação";
+          case CANCELLED -> "Serviço remoto: cancelada";
+          default -> "Serviço remoto: conectado";
+        });
+    dialogDetail.setText(
+        failure == null || failure.getMessage() == null
+            ? result.detail()
+            : result.detail() + "\n" + failure.getMessage());
+    boolean successful = result.state() == SynchronizationProgress.State.BACKUP_VALIDATED;
+    dialogProgressBar.setProgress(successful ? 1 : 0);
+    dialogRetryButton.setVisible(!successful);
+    dialogRetryButton.setManaged(!successful);
+    dialogRecovery.setText(
+        successful
+            ? "Backup remoto concluído e validado. Os dados locais seguem disponíveis offline."
+            : "Os dados locais permanecem salvos. Verifique a conexão e tente novamente; alterações não confirmadas continuam pendentes.");
+    updateDialogProtection();
+  }
+
+  private void queryRemoteBackups() {
+    if (remoteBackupHistory == null || dialogBackupsButton.isDisabled()) return;
+    dialogBackupsButton.setDisable(true);
+    dialogState.setText("Consultando pontos remotos validados...");
+    Task<List<RemoteBackupHistoryPort.RemoteBackupSummary>> task =
+        new Task<>() {
+          @Override
+          protected List<RemoteBackupHistoryPort.RemoteBackupSummary> call() {
+            return remoteBackupHistory.listAvailableBackups();
+          }
+        };
+    task.setOnSucceeded(
+        event -> {
+          dialogBackupsButton.setDisable(false);
+          dialogBackups
+              .getItems()
+              .setAll(
+                  task.getValue().stream()
+                      .map(
+                          backup ->
+                              backup.backupId()
+                                  + " — checkpoint "
+                                  + backup.checkpoint()
+                                  + " — "
+                                  + display(backup.createdAt()))
+                      .toList());
+          dialogState.setText("Consulta concluída; nenhum backup foi baixado.");
+        });
+    task.setOnFailed(
+        event -> {
+          dialogBackupsButton.setDisable(false);
+          dialogState.setText("Não foi possível consultar backups. Tente novamente.");
+          dialogRecovery.setText("A consulta não alterou nem baixou dados locais ou remotos.");
+        });
+    Thread worker = new Thread(task, "tucuma-backup-history");
+    worker.setDaemon(true);
+    worker.start();
+  }
+
+  private static String display(java.time.Instant instant) {
+    return instant == null ? "Nunca" : instant.toString();
   }
 
   private VBox createNavigation() {

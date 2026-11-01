@@ -10,6 +10,7 @@ import br.com.espacotucuma.desktop.application.port.audit.AuditRepository;
 import br.com.espacotucuma.desktop.application.port.outbox.OutboxRepository;
 import br.com.espacotucuma.desktop.application.port.synchronization.DeviceCredentialStore;
 import br.com.espacotucuma.desktop.application.port.synchronization.ManualSynchronizationPort;
+import br.com.espacotucuma.desktop.application.port.synchronization.RemoteBackupHistoryPort;
 import br.com.espacotucuma.desktop.application.port.synchronization.RemoteChangeRepository;
 import br.com.espacotucuma.desktop.application.port.synchronization.SynchronizationProgress;
 import br.com.espacotucuma.desktop.application.port.transaction.UnitOfWork;
@@ -43,7 +44,8 @@ import java.util.UUID;
 import java.util.function.Consumer;
 
 /** Sends pending outbox records only when explicitly invoked by the operator. */
-public final class HttpManualSynchronizationClient implements ManualSynchronizationPort {
+public final class HttpManualSynchronizationClient
+    implements ManualSynchronizationPort, RemoteBackupHistoryPort {
   private static final int BATCH_SIZE = 20;
   private static final int CHANGE_PAGE_SIZE = 100;
   private static final int MAX_ATTEMPTS = 2;
@@ -286,6 +288,52 @@ public final class HttpManualSynchronizationClient implements ManualSynchronizat
       progress.accept(result);
       recordAudit(operator, "SINCRONIZACAO_FALHOU", result);
       throw failure;
+    }
+  }
+
+  @Override
+  public boolean canListBackups() {
+    return authorization != null && authorization.isAllowed(Permission.BACKUP_MANAGE);
+  }
+
+  @Override
+  public List<RemoteBackupSummary> listAvailableBackups() {
+    if (authorization != null) authorization.require(Permission.BACKUP_MANAGE);
+    String credential =
+        credentials
+            .find(deviceId)
+            .orElseThrow(() -> new IllegalStateException("Esta estação ainda não foi pareada."));
+    String token = requestAccessToken(credential);
+    HttpRequest request = versionedRequest("/sync/backups", token).GET().build();
+    try {
+      HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
+      if (response.statusCode() != 200) throw httpFailure(response.statusCode());
+      JsonNode body = json.readTree(response.body());
+      if (body.path("contractVersion").asInt(-1) != SyncContract.VERSION
+          || !body.path("backups").isArray()) {
+        throw new IllegalStateException("A lista de backups retornou um contrato incompatível.");
+      }
+      List<RemoteBackupSummary> backups = new ArrayList<>();
+      for (JsonNode backup : body.path("backups")) {
+        if (backup.path("contractVersion").asInt(-1) != SyncContract.VERSION
+            || !"VALIDADO".equals(backup.path("status").asText())
+            || !backup.hasNonNull("backupId")
+            || !backup.hasNonNull("createdAt")
+            || backup.path("checkpoint").asLong(-1) < 0) {
+          throw new IllegalStateException("A lista contém um ponto de recuperação inválido.");
+        }
+        backups.add(
+            new RemoteBackupSummary(
+                UUID.fromString(backup.path("backupId").asText()),
+                backup.path("checkpoint").asLong(),
+                Instant.parse(backup.path("createdAt").asText())));
+      }
+      return List.copyOf(backups);
+    } catch (IOException failure) {
+      throw new IllegalStateException("Não foi possível consultar os backups remotos.", failure);
+    } catch (InterruptedException cancelled) {
+      Thread.currentThread().interrupt();
+      throw new IllegalStateException("Consulta de backups cancelada.", cancelled);
     }
   }
 

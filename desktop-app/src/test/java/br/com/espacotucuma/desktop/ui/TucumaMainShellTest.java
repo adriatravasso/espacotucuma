@@ -5,15 +5,21 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import br.com.espacotucuma.desktop.application.ProtectionStatus;
+import br.com.espacotucuma.desktop.application.port.synchronization.ManualSynchronizationPort;
+import br.com.espacotucuma.desktop.application.port.synchronization.RemoteBackupHistoryPort;
+import br.com.espacotucuma.desktop.application.port.synchronization.SynchronizationProgress;
 import com.tngtech.archunit.core.domain.JavaClass;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import javafx.scene.Scene;
+import javafx.scene.control.ListView;
 import javafx.scene.control.MenuBar;
 import javafx.scene.control.MenuItem;
 import javafx.scene.input.KeyCode;
@@ -24,6 +30,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.testfx.api.FxRobot;
 import org.testfx.framework.junit5.ApplicationExtension;
 import org.testfx.framework.junit5.Start;
+import org.testfx.util.WaitForAsyncUtils;
 
 @ExtendWith(ApplicationExtension.class)
 class TucumaMainShellTest {
@@ -32,24 +39,31 @@ class TucumaMainShellTest {
   private AtomicInteger synchronizationCalls;
   private CountDownLatch synchronizationStarted;
   private CountDownLatch releaseSynchronization;
+  private FakeSynchronizationPort synchronizationPort;
+  private java.util.concurrent.atomic.AtomicReference<ProtectionStatus> currentStatus;
+  private AtomicBoolean failFirstSynchronization;
 
   @Start
   void start(Stage stage) {
     synchronizationCalls = new AtomicInteger();
     synchronizationStarted = new CountDownLatch(1);
     releaseSynchronization = new CountDownLatch(1);
+    currentStatus =
+        new java.util.concurrent.atomic.AtomicReference<>(
+            new ProtectionStatus(
+                "Administradora Sintética",
+                Path.of("dados/tucuma.sqlite"),
+                2,
+                0,
+                null,
+                0,
+                null,
+                null));
+    failFirstSynchronization = new AtomicBoolean();
+    synchronizationPort = new FakeSynchronizationPort();
     shell =
         new TucumaMainShell(
-            () ->
-                new ProtectionStatus(
-                    "Administradora Sintética",
-                    Path.of("dados/tucuma.sqlite"),
-                    0,
-                    0,
-                    null,
-                    0,
-                    null,
-                    null),
+            currentStatus::get,
             null,
             null,
             null,
@@ -58,19 +72,7 @@ class TucumaMainShellTest {
             null,
             null,
             null,
-            () -> {
-              synchronizationCalls.incrementAndGet();
-              synchronizationStarted.countDown();
-              boolean interrupted = false;
-              while (releaseSynchronization.getCount() > 0) {
-                try {
-                  releaseSynchronization.await(5, TimeUnit.SECONDS);
-                } catch (InterruptedException ignored) {
-                  interrupted = true;
-                }
-              }
-              if (interrupted) Thread.currentThread().interrupt();
-            });
+            synchronizationPort);
     stage.setScene(new Scene(shell.root(), 1180, 720));
     stage.show();
   }
@@ -143,7 +145,13 @@ class TucumaMainShellTest {
     assertEquals(0, synchronizationCalls.get());
     robot.interact(() -> robot.lookup("#command-sync").queryButton().fire());
     assertTrue(synchronizationStarted.await(5, TimeUnit.SECONDS));
-    assertTrue(robot.lookup("#syncProgress").queryLabeled().getText().contains("Verificando"));
+    assertTrue(robot.lookup("#syncProgress").queryLabeled().getText().contains("Enviando"));
+    assertEquals(
+        "Somente neste computador — Pendentes: 2",
+        robot.lookup("#syncDialogProtection").queryLabeled().getText());
+    assertTrue(robot.lookup("#syncDialogState").queryLabeled().getText().contains("Enviando"));
+    assertEquals(
+        "Serviço remoto: conectado", robot.lookup("#syncDialogNetwork").queryLabeled().getText());
     try {
       robot.interact(
           () ->
@@ -156,8 +164,181 @@ class TucumaMainShellTest {
                   .fire());
       assertEquals(1, synchronizationCalls.get());
       assertTrue(robot.lookup("#command-sync").queryButton().isDisabled());
+      robot.interact(() -> robot.lookup("#module-clients").queryButton().fire());
+      assertEquals("Clientes", robot.lookup("#moduleTitle").queryLabeled().getText());
     } finally {
       releaseSynchronization.countDown();
+    }
+    WaitForAsyncUtils.waitFor(
+        5,
+        TimeUnit.SECONDS,
+        () ->
+            robot
+                .lookup("#syncDialogState")
+                .queryLabeled()
+                .getText()
+                .equals("Dados sincronizados; backup pendente."));
+    WaitForAsyncUtils.waitFor(
+        5,
+        TimeUnit.SECONDS,
+        () ->
+            robot
+                .lookup("#syncDialogRecovery")
+                .queryLabeled()
+                .getText()
+                .contains("permanecem salvos"));
+    assertTrue(
+        robot.lookup("#syncDialogRecovery").queryLabeled().getText().contains("permanecem salvos"));
+    assertTrue(robot.lookup("#syncDialogRetry").queryButton().isVisible());
+
+    robot.interact(() -> robot.lookup("#syncDialogRetry").queryButton().fire());
+    WaitForAsyncUtils.waitFor(5, TimeUnit.SECONDS, () -> synchronizationCalls.get() == 2);
+    WaitForAsyncUtils.waitFor(
+        5,
+        TimeUnit.SECONDS,
+        () ->
+            robot
+                .lookup("#syncDialogState")
+                .queryLabeled()
+                .getText()
+                .contains("Backup remoto validado"));
+    assertEquals(
+        "Backup concluído — Pendentes: 0",
+        robot.lookup("#syncDialogProtection").queryLabeled().getText());
+    assertFalse(robot.lookup("#syncDialogRetry").queryButton().isVisible());
+
+    robot.interact(() -> robot.lookup("#syncDialogBackups").queryButton().fire());
+    WaitForAsyncUtils.waitFor(
+        5,
+        TimeUnit.SECONDS,
+        () -> robot.lookup("#syncDialogBackupList").queryAs(ListView.class).getItems().size() == 1);
+    assertTrue(
+        robot
+            .lookup("#syncDialogState")
+            .queryLabeled()
+            .getText()
+            .contains("nenhum backup foi baixado"));
+  }
+
+  @Test
+  @Timeout(30)
+  void noConnectionShowsRecoveryGuidanceAndAllowsRetry(FxRobot robot) throws Exception {
+    failFirstSynchronization.set(true);
+    robot.interact(() -> robot.lookup("#command-sync").queryButton().fire());
+    WaitForAsyncUtils.waitFor(
+        5,
+        TimeUnit.SECONDS,
+        () -> robot.lookup("#syncDialogState").queryLabeled().getText().contains("Sem conexão"));
+
+    assertEquals(
+        "Serviço remoto: sem conexão", robot.lookup("#syncDialogNetwork").queryLabeled().getText());
+    assertTrue(
+        robot.lookup("#syncDialogRecovery").queryLabeled().getText().contains("permanecem salvos"));
+    assertTrue(robot.lookup("#syncDialogRetry").queryButton().isVisible());
+
+    robot.interact(() -> robot.lookup("#syncDialogRetry").queryButton().fire());
+    WaitForAsyncUtils.waitFor(5, TimeUnit.SECONDS, () -> synchronizationCalls.get() == 2);
+    WaitForAsyncUtils.waitFor(
+        5,
+        TimeUnit.SECONDS,
+        () ->
+            robot
+                .lookup("#syncDialogState")
+                .queryLabeled()
+                .getText()
+                .contains("Backup remoto validado"));
+    assertEquals(2, synchronizationCalls.get());
+  }
+
+  private final class FakeSynchronizationPort
+      implements ManualSynchronizationPort, RemoteBackupHistoryPort {
+    @Override
+    public void synchronizeNow() {}
+
+    @Override
+    public void synchronizeNow(java.util.function.Consumer<SynchronizationProgress> progress) {
+      int attempt = synchronizationCalls.incrementAndGet();
+      progress.accept(SynchronizationProgress.of(SynchronizationProgress.State.VERIFYING_ACCESS));
+      if (attempt == 1 && failFirstSynchronization.get()) {
+        progress.accept(
+            new SynchronizationProgress(
+                SynchronizationProgress.State.NO_CONNECTION,
+                "Sem conexão com o serviço remoto.",
+                0,
+                0,
+                0,
+                0,
+                null));
+        throw new IllegalStateException("Falha de rede simulada.");
+      }
+      progress.accept(
+          new SynchronizationProgress(
+              SynchronizationProgress.State.SENDING, "Enviando lote de teste.", 1, 0, 0, 0, null));
+      if (attempt == 1) {
+        synchronizationStarted.countDown();
+        boolean interrupted = false;
+        while (releaseSynchronization.getCount() > 0) {
+          try {
+            releaseSynchronization.await(5, TimeUnit.SECONDS);
+          } catch (InterruptedException ignored) {
+            interrupted = true;
+          }
+        }
+        if (interrupted) Thread.currentThread().interrupt();
+        currentStatus.set(
+            new ProtectionStatus(
+                "Administradora Sintética",
+                Path.of("dados/tucuma.sqlite"),
+                0,
+                1,
+                Instant.parse("2026-11-01T12:00:00Z"),
+                0,
+                null,
+                null));
+        progress.accept(
+            new SynchronizationProgress(
+                SynchronizationProgress.State.SYNCHRONIZED_NO_BACKUP,
+                "Dados sincronizados; backup pendente.",
+                1,
+                0,
+                0,
+                1,
+                null));
+      } else {
+        currentStatus.set(
+            new ProtectionStatus(
+                "Administradora Sintética",
+                Path.of("dados/tucuma.sqlite"),
+                0,
+                1,
+                Instant.parse("2026-11-01T12:00:00Z"),
+                1,
+                "backup-sintetico",
+                Instant.parse("2026-11-01T12:00:10Z")));
+        progress.accept(
+            new SynchronizationProgress(
+                SynchronizationProgress.State.BACKUP_VALIDATED,
+                "Backup remoto validado.",
+                1,
+                0,
+                0,
+                1,
+                java.util.UUID.fromString("00000000-0000-0000-0000-000000000047")));
+      }
+    }
+
+    @Override
+    public boolean canListBackups() {
+      return true;
+    }
+
+    @Override
+    public List<RemoteBackupSummary> listAvailableBackups() {
+      return List.of(
+          new RemoteBackupSummary(
+              java.util.UUID.fromString("00000000-0000-0000-0000-000000000047"),
+              1,
+              Instant.parse("2026-11-01T12:00:10Z")));
     }
   }
 
