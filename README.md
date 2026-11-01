@@ -35,7 +35,7 @@ No macOS/Linux:
 
 Os scripts chamam `clean verify` pelo Maven Wrapper. O teste do desktop abre uma janela JavaFX em modo smoke e encerra; o teste do serviço verifica o endpoint Actuator sem iniciar outro processo nem depender de banco ou credenciais.
 
-O GitHub Actions executa o mesmo build em Java 21, valida a formatação, a convergência de dependências, todos os testes Maven e faz uma varredura Gitleaks no histórico. Não há etapa de publicação ou deploy automático. Ainda não existem migrações de banco nesta fase; quando adicionadas, os testes de migração fazem parte do mesmo `verify`.
+O GitHub Actions executa o mesmo build em Java 21, valida a formatação, a convergência de dependências, todos os testes Maven e faz uma varredura Gitleaks no histórico. Não há etapa de publicação ou deploy automático. O desktop aplica as migrações versionadas do Flyway no banco local antes de abrir a janela; valores financeiros são armazenados em centavos inteiros e as chaves estrangeiras do SQLite ficam habilitadas em cada conexão.
 
 Para iniciar a janela desktop, execute `../mvnw javafx:run` dentro de `desktop-app`. Para iniciar o serviço isoladamente, execute `../mvnw spring-boot:run` dentro de `sync-service`.
 

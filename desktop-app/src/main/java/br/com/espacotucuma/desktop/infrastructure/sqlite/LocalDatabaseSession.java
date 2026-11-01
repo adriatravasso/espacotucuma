@@ -8,7 +8,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -50,7 +49,9 @@ public final class LocalDatabaseSession implements AutoCloseable {
 
     Connection connection = null;
     try {
-      connection = DriverManager.getConnection("jdbc:sqlite:" + file);
+      connection = SQLiteSchemaMigrator.dataSource(file).getConnection();
+      verifyDatabase(connection);
+      SQLiteSchemaMigrator.migrate(file);
       verifyDatabase(connection);
       return new LocalDatabaseSession(file, connection, lockChannel, lock);
     } catch (SQLException | RuntimeException error) {
@@ -86,6 +87,10 @@ public final class LocalDatabaseSession implements AutoCloseable {
 
   public Path databaseFile() {
     return databaseFile;
+  }
+
+  Connection connection() {
+    return connection;
   }
 
   @Override

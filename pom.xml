@@ -31,6 +31,7 @@
         <spotless-maven-plugin.version>3.10.4</spotless-maven-plugin.version>
         <google-java-format.version>1.36.1</google-java-format.version>
         <sqlite-jdbc.version>3.54.1.0</sqlite-jdbc.version>
+        <flyway.version>13.11.1</flyway.version>
     </properties>
 
     <dependencyManagement>
@@ -68,6 +69,16 @@
                 <groupId>org.xerial</groupId>
                 <artifactId>sqlite-jdbc</artifactId>
                 <version>${sqlite-jdbc.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.flywaydb</groupId>
+                <artifactId>flyway-core</artifactId>
+                <version>${flyway.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.flywaydb</groupId>
+                <artifactId>flyway-database-nc-sqlite</artifactId>
+                <version>${flyway.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
