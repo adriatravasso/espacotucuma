@@ -33,6 +33,7 @@ import br.com.espacotucuma.desktop.application.port.scheduling.AppointmentReposi
 import br.com.espacotucuma.desktop.application.port.service.ServiceRepository;
 import br.com.espacotucuma.desktop.application.prepaid.MaintainPrepaidPackagesUseCase;
 import br.com.espacotucuma.desktop.application.professional.MaintainProfessionalUseCase;
+import br.com.espacotucuma.desktop.application.reports.QueryCommercialReportsUseCase;
 import br.com.espacotucuma.desktop.application.scheduling.MaintainAppointmentUseCase;
 import br.com.espacotucuma.desktop.application.service.MaintainServiceUseCase;
 import br.com.espacotucuma.desktop.infrastructure.security.Pbkdf2PasswordHasher;
@@ -42,6 +43,7 @@ import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteAttendanceReposit
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteAuditRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteCashTurnRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteClientRepository;
+import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteCommercialReportRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteCommissionRuleRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteCommissionStatementRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteInitialSetupRepository;
@@ -101,6 +103,7 @@ public final class DesktopRuntime implements AutoCloseable {
   private final SqliteProtectionStatusRepository protectionStatus;
   private final InventoryRepository inventory;
   private final MaintainInventoryUseCase maintainInventory;
+  private final QueryCommercialReportsUseCase commercialReports;
 
   private DesktopRuntime(
       LocalDatabaseSession database,
@@ -135,6 +138,7 @@ public final class DesktopRuntime implements AutoCloseable {
       SqliteProtectionStatusRepository protectionStatus,
       InventoryRepository inventory,
       MaintainInventoryUseCase maintainInventory,
+      QueryCommercialReportsUseCase commercialReports,
       boolean testProfile) {
     this.database = database;
     this.logHandler = logHandler;
@@ -168,6 +172,7 @@ public final class DesktopRuntime implements AutoCloseable {
     this.protectionStatus = protectionStatus;
     this.inventory = inventory;
     this.maintainInventory = maintainInventory;
+    this.commercialReports = commercialReports;
     this.testProfile = testProfile;
   }
 
@@ -244,6 +249,10 @@ public final class DesktopRuntime implements AutoCloseable {
               authorization,
               audit,
               stationId);
+      QueryCommercialReportsUseCase commercialReports =
+          new QueryCommercialReportsUseCase(
+              new SqliteCommercialReportRepository(database.connection(), unitOfWork),
+              authorization);
       CommissionRuleRepository commissionRules =
           new SqliteCommissionRuleRepository(database.connection(), unitOfWork);
       MaintainCommissionRuleUseCase maintainCommissionRule =
@@ -394,6 +403,7 @@ public final class DesktopRuntime implements AutoCloseable {
           protectionStatus,
           inventory,
           maintainInventory,
+          commercialReports,
           environment.profile()
               == br.com.espacotucuma.desktop.application.config.EnvironmentProfile.TEST);
     } catch (IOException | java.sql.SQLException | RuntimeException error) {
@@ -526,6 +536,10 @@ public final class DesktopRuntime implements AutoCloseable {
 
   public MaintainInventoryUseCase maintainInventory() {
     return maintainInventory;
+  }
+
+  public QueryCommercialReportsUseCase commercialReports() {
+    return commercialReports;
   }
 
   public br.com.espacotucuma.desktop.application.ProtectionStatus protectionStatus() {
