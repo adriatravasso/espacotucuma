@@ -1,5 +1,6 @@
 package br.com.espacotucuma.desktop;
 
+import br.com.espacotucuma.desktop.application.client.MaintainClientUseCase;
 import br.com.espacotucuma.desktop.application.client.RegisterClientUseCase;
 import br.com.espacotucuma.desktop.application.config.DesktopEnvironment;
 import br.com.espacotucuma.desktop.application.config.DesktopPreferences;
@@ -11,6 +12,7 @@ import br.com.espacotucuma.desktop.application.identity.DeactivateUserUseCase;
 import br.com.espacotucuma.desktop.application.identity.LoginUseCase;
 import br.com.espacotucuma.desktop.application.identity.LogoutUseCase;
 import br.com.espacotucuma.desktop.application.identity.SessionContext;
+import br.com.espacotucuma.desktop.application.port.client.ClientRepository;
 import br.com.espacotucuma.desktop.infrastructure.security.Pbkdf2PasswordHasher;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.LocalDatabaseSession;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteAuditRepository;
@@ -35,6 +37,9 @@ public final class DesktopRuntime implements AutoCloseable {
   private final LocalDatabaseSession database;
   private final FileHandler logHandler;
   private final RegisterClientUseCase registerClient;
+  private final MaintainClientUseCase maintainClient;
+  private final ClientRepository clients;
+  private final AuthorizationService authorization;
   private final CreateFirstAdministratorUseCase createFirstAdministrator;
   private final ChangeLocalPasswordUseCase changeLocalPassword;
   private final SessionContext sessions;
@@ -49,6 +54,9 @@ public final class DesktopRuntime implements AutoCloseable {
       LocalDatabaseSession database,
       FileHandler logHandler,
       RegisterClientUseCase registerClient,
+      MaintainClientUseCase maintainClient,
+      ClientRepository clients,
+      AuthorizationService authorization,
       CreateFirstAdministratorUseCase createFirstAdministrator,
       ChangeLocalPasswordUseCase changeLocalPassword,
       SessionContext sessions,
@@ -61,6 +69,9 @@ public final class DesktopRuntime implements AutoCloseable {
     this.database = database;
     this.logHandler = logHandler;
     this.registerClient = registerClient;
+    this.maintainClient = maintainClient;
+    this.clients = clients;
+    this.authorization = authorization;
     this.createFirstAdministrator = createFirstAdministrator;
     this.changeLocalPassword = changeLocalPassword;
     this.sessions = sessions;
@@ -97,14 +108,24 @@ public final class DesktopRuntime implements AutoCloseable {
           new SqliteLocalCredentialRepository(database.connection(), unitOfWork);
       SqliteAuditRepository audit = new SqliteAuditRepository(database.connection(), unitOfWork);
       UUID stationId = stationId(database.databaseFile());
+      SqliteClientRepository clients =
+          new SqliteClientRepository(database.connection(), unitOfWork);
       RegisterClientUseCase registerClient =
           new RegisterClientUseCase(
               unitOfWork,
-              new SqliteClientRepository(database.connection(), unitOfWork),
+              clients,
               new SqliteOutboxRepository(database.connection(), unitOfWork),
               stationId,
               authorization,
               audit);
+      MaintainClientUseCase maintainClient =
+          new MaintainClientUseCase(
+              unitOfWork,
+              clients,
+              new SqliteOutboxRepository(database.connection(), unitOfWork),
+              authorization,
+              audit,
+              stationId);
       CreateFirstAdministratorUseCase createFirstAdministrator =
           new CreateFirstAdministratorUseCase(
               unitOfWork,
@@ -135,6 +156,9 @@ public final class DesktopRuntime implements AutoCloseable {
           database,
           logHandler,
           registerClient,
+          maintainClient,
+          clients,
+          authorization,
           createFirstAdministrator,
           changeLocalPassword,
           sessions,
@@ -159,6 +183,18 @@ public final class DesktopRuntime implements AutoCloseable {
 
   public RegisterClientUseCase registerClient() {
     return registerClient;
+  }
+
+  public MaintainClientUseCase maintainClient() {
+    return maintainClient;
+  }
+
+  public ClientRepository clients() {
+    return clients;
+  }
+
+  public AuthorizationService authorization() {
+    return authorization;
   }
 
   public CreateFirstAdministratorUseCase createFirstAdministrator() {

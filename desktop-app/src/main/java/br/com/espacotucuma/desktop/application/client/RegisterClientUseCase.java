@@ -40,27 +40,34 @@ public final class RegisterClientUseCase {
   }
 
   public Client register(String name, String phone) {
+    return register(name, phone, null, null);
+  }
+
+  public Client register(String name, String phone, String optionalContact, String preferences) {
     AuthenticatedUser actor = authorization.requireUser(Permission.CLIENT_REGISTER);
     Instant now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
-    Client client = new Client(UUID.randomUUID(), name, phone, now);
     UUID operationId = UUID.randomUUID();
-    PendingOperation operation =
-        new PendingOperation(
-            operationId,
-            "cliente",
-            client.id(),
-            "CLIENTE_CRIADO",
-            operationId.toString(),
-            payload(client),
-            PAYLOAD_VERSION,
-            0,
-            originStationId,
-            now,
-            0);
     return unitOfWork.execute(
         () -> {
+          Client client =
+              new Client(
+                  UUID.randomUUID(),
+                  clients.nextInternalCode(),
+                  name,
+                  phone,
+                  optionalContact,
+                  preferences,
+                  true,
+                  now,
+                  now);
           clients.save(client);
-          outbox.enqueue(operation);
+          outbox.enqueue(
+              operation(
+                  client,
+                  "CLIENTE_CRIADO",
+                  operationId,
+                  outbox.expectedVersionForNext("cliente", client.id()),
+                  now));
           audit.record(
               new AuditEvent(
                   UUID.randomUUID(),
@@ -77,39 +84,19 @@ public final class RegisterClientUseCase {
         });
   }
 
-  private String payload(Client client) {
-    return "{\"id\":\""
-        + client.id()
-        + "\",\"nome\":\""
-        + escape(client.name())
-        + "\",\"telefone\":"
-        + (client.phone() == null ? "null" : "\"" + escape(client.phone()) + "\"")
-        + ",\"criadoEmUtc\":\""
-        + client.createdAt()
-        + "\"}";
-  }
-
-  private String escape(String value) {
-    StringBuilder escaped = new StringBuilder();
-    for (int index = 0; index < value.length(); index++) {
-      char character = value.charAt(index);
-      switch (character) {
-        case '"' -> escaped.append("\\\"");
-        case '\\' -> escaped.append("\\\\");
-        case '\b' -> escaped.append("\\b");
-        case '\f' -> escaped.append("\\f");
-        case '\n' -> escaped.append("\\n");
-        case '\r' -> escaped.append("\\r");
-        case '\t' -> escaped.append("\\t");
-        default -> {
-          if (character < 0x20) {
-            escaped.append(String.format("\\u%04x", (int) character));
-          } else {
-            escaped.append(character);
-          }
-        }
-      }
-    }
-    return escaped.toString();
+  private PendingOperation operation(
+      Client client, String action, UUID operationId, long expectedVersion, Instant now) {
+    return new PendingOperation(
+        operationId,
+        "cliente",
+        client.id(),
+        action,
+        operationId.toString(),
+        ClientPayload.json(client),
+        PAYLOAD_VERSION,
+        expectedVersion,
+        originStationId,
+        now,
+        0);
   }
 }

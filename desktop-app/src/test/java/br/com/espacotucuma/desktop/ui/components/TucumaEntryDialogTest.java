@@ -42,7 +42,7 @@ class TucumaEntryDialogTest {
     CompletableFuture<Optional<Map<String, String>>> created = openForm(robot, Map.of());
     robot.interact(() -> robot.lookup("Salvar").queryButton().fire());
     assertEquals(
-        "Informe o campo obrigatório: Name.",
+        "Informe o campo obrigatório: Nome.",
         robot.lookup("#formMessage").queryLabeled().getText());
     assertFalse(robot.lookup("#form-name").queryTextInputControl().getText().contains("Exception"));
 

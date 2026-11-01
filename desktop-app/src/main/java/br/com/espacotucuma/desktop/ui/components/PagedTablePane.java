@@ -9,7 +9,9 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ForkJoinPool;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
 import javafx.geometry.Insets;
@@ -50,6 +52,10 @@ public final class PagedTablePane<T> extends BorderPane {
   private final PageLoader<T> loader;
   private final int pageSize;
   private final Executor queryExecutor;
+  private Predicate<T> editAvailability = item -> true;
+  private final boolean hasNewAction;
+  private boolean newActionAllowed = true;
+  private boolean editActionAllowed = true;
   private int pageIndex;
   private long loadGeneration;
   private boolean ascending = true;
@@ -102,6 +108,7 @@ public final class PagedTablePane<T> extends BorderPane {
     sort.getSelectionModel().selectFirst();
     sortDirection.setId("tableSortDirection");
     newRecord.setId("tableNew");
+    hasNewAction = onNew != null;
     newRecord.setDisable(onNew == null);
     newRecord.setAccessibleHelp(
         onNew == null ? "Novo registro indisponível nesta área." : "Criar registro local.");
@@ -173,7 +180,10 @@ public final class PagedTablePane<T> extends BorderPane {
           .selectedItemProperty()
           .addListener(
               (observable, previousItem, selectedItem) ->
-                  editRecord.setDisable(selectedItem == null));
+                  editRecord.setDisable(
+                      selectedItem == null
+                          || !editActionAllowed
+                          || !editAvailability.test(selectedItem)));
       editRecord.setOnAction(
           event -> {
             T selectedItem = table.getSelectionModel().getSelectedItem();
@@ -225,6 +235,55 @@ public final class PagedTablePane<T> extends BorderPane {
     loadPage();
   }
 
+  public void refresh() {
+    loadPage();
+  }
+
+  public T selectedItem() {
+    return table.getSelectionModel().getSelectedItem();
+  }
+
+  public void addSelectionListener(Consumer<T> listener) {
+    Objects.requireNonNull(listener, "listener");
+    table
+        .getSelectionModel()
+        .selectedItemProperty()
+        .addListener((observable, previousItem, selectedItem) -> listener.accept(selectedItem));
+  }
+
+  public void setEditAvailability(Predicate<T> availability) {
+    editAvailability = Objects.requireNonNull(availability, "availability");
+    T selected = table.getSelectionModel().getSelectedItem();
+    editRecord.setDisable(
+        selected == null || !editActionAllowed || !editAvailability.test(selected));
+  }
+
+  public void setNewActionEnabled(boolean enabled) {
+    newActionAllowed = enabled;
+    newRecord.setDisable(!newActionAllowed || !hasNewAction);
+    if (hasNewAction) {
+      String help =
+          enabled
+              ? "Criar registro local."
+              : "Seu perfil não tem permissão para cadastrar registros nesta área.";
+      newRecord.setAccessibleHelp(help);
+      newRecord.setTooltip(new Tooltip(help));
+    }
+  }
+
+  public void setEditActionEnabled(boolean enabled) {
+    editActionAllowed = enabled;
+    T selected = table.getSelectionModel().getSelectedItem();
+    editRecord.setDisable(
+        selected == null || !editActionAllowed || !editAvailability.test(selected));
+    String help =
+        enabled
+            ? "Editar o registro selecionado."
+            : "Seu perfil não tem permissão para editar registros nesta área.";
+    editRecord.setAccessibleHelp(help);
+    editRecord.setTooltip(new Tooltip(help));
+  }
+
   private void handleRefreshKey(KeyEvent event) {
     if (event.isControlDown() && event.getCode() == javafx.scene.input.KeyCode.N) {
       if (!newRecord.isDisabled()) newRecord.fire();
@@ -253,6 +312,7 @@ public final class PagedTablePane<T> extends BorderPane {
                     () -> {
                       if (generation != loadGeneration) return;
                       if (failure != null) {
+                        table.getItems().clear();
                         pageInfo.setText("Dados indisponíveis");
                         previous.setDisable(true);
                         next.setDisable(true);

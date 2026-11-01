@@ -40,11 +40,13 @@ class SQLiteMigrationTest {
       assertTrue(triggerExists(connection, "trg_evento_auditoria_no_delete"));
       assertTrue(triggerExists(connection, "trg_tentativa_login_no_update"));
       assertTrue(triggerExists(connection, "trg_tentativa_login_no_delete"));
+      assertTrue(triggerExists(connection, "trg_cliente_codigo_interno_no_insert"));
+      assertTrue(triggerExists(connection, "trg_cliente_codigo_interno_immutable"));
       assertTrue(tableExists(connection, "tentativa_login"));
       assertTrue(tableExists(connection, "operacao_pendente"));
       assertTrue(tableExists(connection, "status_protecao"));
       assertEquals(
-          6, scalarInt(connection, "SELECT count(*) FROM flyway_schema_history WHERE success = 1"));
+          7, scalarInt(connection, "SELECT count(*) FROM flyway_schema_history WHERE success = 1"));
     }
   }
 
@@ -64,7 +66,7 @@ class SQLiteMigrationTest {
               database.connection(),
               "SELECT count(*) FROM cliente WHERE id = '" + CLIENT_ID + "'"));
       assertEquals(
-          6,
+          7,
           scalarInt(
               database.connection(),
               "SELECT count(*) FROM flyway_schema_history WHERE success = 1"));
@@ -77,6 +79,14 @@ class SQLiteMigrationTest {
         LocalDatabaseSession.open(temp.resolve("constraints.sqlite"))) {
       Connection connection = database.connection();
       assertThrows(SQLException.class, () -> insertClient(connection, CLIENT_ID, " "));
+      assertThrows(
+          SQLException.class,
+          () ->
+              insertClient(
+                  connection,
+                  "ab0ca52a-8cf3-4563-9daf-b32af6df7a2a",
+                  "CLI-INVALID",
+                  "Cliente com código inválido"));
       assertThrows(SQLException.class, () -> insertInvalidAppointment(connection));
       assertEquals(0, scalarInt(connection, "SELECT count(*) FROM cliente"));
       assertEquals(0, scalarInt(connection, "SELECT count(*) FROM agendamento"));
@@ -120,13 +130,20 @@ class SQLiteMigrationTest {
   }
 
   private void insertClient(Connection connection, String id, String name) throws SQLException {
+    insertClient(connection, id, "CLI-000001", name);
+  }
+
+  private void insertClient(Connection connection, String id, String code, String name)
+      throws SQLException {
     try (PreparedStatement statement =
         connection.prepareStatement(
-            "INSERT INTO cliente (id, nome, criado_em_utc, atualizado_em_utc) VALUES (?, ?, ?, ?)")) {
+            "INSERT INTO cliente (id, codigo_interno, nome, criado_em_utc, atualizado_em_utc) "
+                + "VALUES (?, ?, ?, ?, ?)")) {
       statement.setString(1, id);
-      statement.setString(2, name);
-      statement.setString(3, NOW);
+      statement.setString(2, code);
+      statement.setString(3, name);
       statement.setString(4, NOW);
+      statement.setString(5, NOW);
       statement.executeUpdate();
     }
   }
