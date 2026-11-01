@@ -1,6 +1,7 @@
 package br.com.espacotucuma.desktop.application.port.scheduling;
 
 import br.com.espacotucuma.desktop.application.scheduling.Appointment;
+import br.com.espacotucuma.desktop.application.scheduling.AppointmentStatus;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
@@ -21,7 +22,11 @@ public interface AppointmentRepository {
 
   void updateTime(Appointment appointment);
 
-  void cancel(UUID id, java.time.LocalDateTime updatedAt);
+  void transition(
+      UUID id,
+      AppointmentStatus expected,
+      AppointmentStatus next,
+      java.time.LocalDateTime updatedAt);
 
-  void confirm(UUID id, java.time.LocalDateTime updatedAt);
+  boolean hasCompletedAttendance(UUID appointmentId, UUID attendanceId);
 }

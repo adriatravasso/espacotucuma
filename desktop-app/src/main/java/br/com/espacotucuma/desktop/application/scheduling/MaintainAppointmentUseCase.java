@@ -230,76 +230,31 @@ public final class MaintainAppointmentUseCase {
   }
 
   public void cancel(UUID id, String reason) {
-    var actor = authorization.requireUser(Permission.SCHEDULE_MANAGE);
-    String normalizedReason = normalizeReason(reason);
-    LocalDateTime now = localNow();
-    Instant eventAt = instantNow();
-    UUID operationId = UUID.randomUUID();
-    unitOfWork.execute(
-        () -> {
-          Appointment appointment = appointments.findById(id).orElseThrow(() -> missing(id));
-          if (appointment.status() != AppointmentStatus.AGENDADO
-              && appointment.status() != AppointmentStatus.CONFIRMADO) {
-            throw new IllegalStateException("Somente agendamentos ativos podem ser cancelados.");
-          }
-          appointments.cancel(
-              id, now.isBefore(appointment.updatedAt()) ? appointment.updatedAt() : now);
-          record(
-              id,
-              operationId,
-              actor.id(),
-              "AGENDAMENTO_CANCELADO",
-              "{\"id\":\""
-                  + id
-                  + "\",\"estado\":\"CANCELADO\",\"motivo\":\""
-                  + escape(normalizedReason)
-                  + "\"}",
-              "{\"estadoAnterior\":\"" + appointment.status() + "\",\"estadoNovo\":\"CANCELADO\"}",
-              normalizedReason,
-              eventAt);
-          return null;
-        });
+    transition(id, AppointmentStatus.CANCELADO, Permission.SCHEDULE_MANAGE, reason, null);
   }
 
   public Appointment confirm(UUID id) {
-    var actor = authorization.requireUser(Permission.SCHEDULE_MANAGE);
-    LocalDateTime now = localNow();
-    Instant eventAt = instantNow();
-    UUID operationId = UUID.randomUUID();
-    return unitOfWork.execute(
-        () -> {
-          Appointment appointment = appointments.findById(id).orElseThrow(() -> missing(id));
-          if (appointment.status() != AppointmentStatus.AGENDADO) {
-            throw new IllegalStateException(
-                "Somente agendamentos pendentes podem ser confirmados.");
-          }
-          LocalDateTime updatedAt =
-              now.isBefore(appointment.updatedAt()) ? appointment.updatedAt() : now;
-          appointments.confirm(id, updatedAt);
-          Appointment confirmed =
-              new Appointment(
-                  appointment.id(),
-                  appointment.clientId(),
-                  appointment.professionalId(),
-                  appointment.serviceId(),
-                  appointment.startsAt(),
-                  appointment.endsAt(),
-                  AppointmentStatus.CONFIRMADO,
-                  appointment.notes(),
-                  appointment.createdBy(),
-                  appointment.createdAt(),
-                  updatedAt);
-          record(
-              id,
-              operationId,
-              actor.id(),
-              "AGENDAMENTO_CONFIRMADO",
-              payload(confirmed, false),
-              "{\"estadoAnterior\":\"AGENDADO\",\"estadoNovo\":\"CONFIRMADO\"}",
-              null,
-              eventAt);
-          return confirmed;
-        });
+    return transition(id, AppointmentStatus.CONFIRMADO, Permission.SCHEDULE_MANAGE, null, null);
+  }
+
+  public Appointment startAttendance(UUID id) {
+    return transition(
+        id, AppointmentStatus.EM_ATENDIMENTO, Permission.ATTENDANCE_RECORD, null, null);
+  }
+
+  public Appointment markNoShow(UUID id, String reason) {
+    return transition(
+        id, AppointmentStatus.NAO_COMPARECEU, Permission.SCHEDULE_MANAGE, reason, null);
+  }
+
+  /** Finishing a visit requires the linked attendance to already be concluded. */
+  public Appointment complete(UUID id, UUID attendanceId) {
+    return transition(
+        id,
+        AppointmentStatus.CONCLUIDO,
+        Permission.ATTENDANCE_RECORD,
+        null,
+        Objects.requireNonNull(attendanceId, "attendanceId"));
   }
 
   public List<Appointment> findForDay(LocalDate day, UUID professionalId) {
@@ -310,6 +265,55 @@ public final class MaintainAppointmentUseCase {
   public Appointment findById(UUID id) {
     authorization.require(Permission.SCHEDULE_READ);
     return appointments.findById(id).orElseThrow(() -> missing(id));
+  }
+
+  private Appointment transition(
+      UUID id, AppointmentStatus target, Permission permission, String reason, UUID attendanceId) {
+    var actor = authorization.requireUser(permission);
+    String normalizedReason =
+        target == AppointmentStatus.CANCELADO || target == AppointmentStatus.NAO_COMPARECEU
+            ? normalizeReason(reason)
+            : null;
+    LocalDateTime now = localNow();
+    Instant eventAt = instantNow();
+    UUID operationId = UUID.randomUUID();
+    return unitOfWork.execute(
+        () -> {
+          Appointment previous =
+              appointments
+                  .findById(Objects.requireNonNull(id, "id"))
+                  .orElseThrow(() -> missing(id));
+          if (target == AppointmentStatus.CONCLUIDO
+              && !appointments.hasCompletedAttendance(id, attendanceId)) {
+            throw new IllegalStateException(
+                "Conclua o atendimento associado antes de concluir o agendamento.");
+          }
+          Appointment updated = previous.transitionTo(target, now);
+          appointments.transition(id, previous.status(), target, updated.updatedAt());
+          String action = "AGENDAMENTO_" + target.name();
+          String details =
+              "{\"estadoAnterior\":\""
+                  + previous.status()
+                  + "\",\"estadoNovo\":\""
+                  + target
+                  + "\""
+                  + (attendanceId == null ? "" : ",\"atendimentoId\":\"" + attendanceId + "\"")
+                  + (normalizedReason == null
+                      ? ""
+                      : ",\"motivo\":\"" + escape(normalizedReason) + "\"")
+                  + "}";
+          Appointment result = updated;
+          record(
+              id,
+              operationId,
+              actor.id(),
+              action,
+              payload(result, false),
+              details,
+              normalizedReason,
+              eventAt);
+          return result;
+        });
   }
 
   private BeautyService activeService(UUID id) {

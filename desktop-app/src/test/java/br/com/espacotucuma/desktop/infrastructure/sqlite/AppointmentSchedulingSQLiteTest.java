@@ -179,6 +179,62 @@ class AppointmentSchedulingSQLiteTest {
   }
 
   @Test
+  void noShowIsTerminalAndRecordedOnceWithItsReason(@TempDir Path temp) throws Exception {
+    try (Fixture fixture = new Fixture(temp.resolve("schedule-no-show.sqlite"))) {
+      var created = fixture.createAt(9, 0);
+      var absent = fixture.maintain.markNoShow(created.id(), "Cliente não compareceu");
+      assertEquals(AppointmentStatus.NAO_COMPARECEU, absent.status());
+      assertThrows(
+          IllegalStateException.class,
+          () -> fixture.maintain.markNoShow(created.id(), "Repetição de teste"));
+      assertEquals(
+          1,
+          fixture.scalar(
+              "SELECT COUNT(*) FROM evento_auditoria WHERE acao='AGENDAMENTO_NAO_COMPARECEU' AND motivo='Cliente não compareceu'"));
+      assertEquals(
+          1,
+          fixture.scalar(
+              "SELECT COUNT(*) FROM operacao_pendente WHERE entidade='agendamento' AND tipo_operacao='AGENDAMENTO_NAO_COMPARECEU'"));
+    }
+  }
+
+  @Test
+  void completionRequiresLinkedCompletedAttendanceAndDoesNotDuplicateEvents(@TempDir Path temp)
+      throws Exception {
+    try (Fixture fixture = new Fixture(temp.resolve("schedule-complete.sqlite"))) {
+      var appointment = fixture.createAt(9, 0);
+      fixture.maintain.confirm(appointment.id());
+      fixture.maintain.startAttendance(appointment.id());
+      UUID attendanceId = UUID.randomUUID();
+      fixture.insertAttendance(appointment.id(), attendanceId, "EM_ANDAMENTO");
+
+      assertThrows(
+          IllegalStateException.class,
+          () -> fixture.maintain.complete(appointment.id(), attendanceId));
+      assertEquals(
+          AppointmentStatus.EM_ATENDIMENTO, fixture.maintain.findById(appointment.id()).status());
+
+      fixture.execute(
+          "UPDATE atendimento SET estado='CONCLUIDO',concluido_em_utc='2026-11-02T13:40:00Z' WHERE id='"
+              + attendanceId
+              + "'");
+      var completed = fixture.maintain.complete(appointment.id(), attendanceId);
+      assertEquals(AppointmentStatus.CONCLUIDO, completed.status());
+      assertThrows(
+          IllegalStateException.class,
+          () -> fixture.maintain.complete(appointment.id(), attendanceId));
+      assertEquals(
+          1,
+          fixture.scalar(
+              "SELECT COUNT(*) FROM evento_auditoria WHERE acao='AGENDAMENTO_CONCLUIDO'"));
+      assertEquals(
+          1,
+          fixture.scalar(
+              "SELECT COUNT(*) FROM operacao_pendente WHERE entidade='agendamento' AND tipo_operacao='AGENDAMENTO_CONCLUIDO'"));
+    }
+  }
+
+  @Test
   void concurrentCreatesOnSingleConnectionCannotClaimSameSlot(@TempDir Path temp) throws Exception {
     try (Fixture fixture = new Fixture(temp.resolve("schedule-concurrent.sqlite"))) {
       CountDownLatch ready = new CountDownLatch(2);
@@ -414,6 +470,24 @@ class AppointmentSchedulingSQLiteTest {
         insert.setString(4, end.toString());
         insert.setString(5, "Bloqueio de teste");
         insert.setString(6, NOW.toString());
+        insert.executeUpdate();
+      }
+    }
+
+    void insertAttendance(UUID appointmentId, UUID attendanceId, String state) throws Exception {
+      try (PreparedStatement insert =
+          database
+              .connection()
+              .prepareStatement(
+                  "INSERT INTO atendimento (id,agendamento_id,cliente_id,profissional_id,estado,subtotal_centavos,desconto_centavos,total_centavos,iniciado_em_utc,concluido_em_utc,criado_por_usuario_id,criado_em_utc) VALUES (?,?,?,?,?,2500,0,2500,?,NULL,?,?)")) {
+        insert.setString(1, attendanceId.toString());
+        insert.setString(2, appointmentId.toString());
+        insert.setString(3, clientId.toString());
+        insert.setString(4, professionalId.toString());
+        insert.setString(5, state);
+        insert.setString(6, "2026-11-02T13:00:00Z");
+        insert.setString(7, adminId.toString());
+        insert.setString(8, "2026-11-02T13:00:00Z");
         insert.executeUpdate();
       }
     }

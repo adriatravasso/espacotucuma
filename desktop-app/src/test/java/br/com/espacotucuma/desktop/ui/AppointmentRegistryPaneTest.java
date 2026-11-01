@@ -133,6 +133,20 @@ class AppointmentRegistryPaneTest {
                   .status()
                   .name()
                   .equals("CONFIRMADO"));
+      robot.interact(
+          () ->
+              robot.lookup("#appointmentTable").queryTableView().getSelectionModel().selectFirst());
+      Platform.runLater(() -> robot.lookup("#appointmentStart").queryButton().fire());
+      WaitForAsyncUtils.waitFor(
+          8,
+          TimeUnit.SECONDS,
+          () ->
+              fixture
+                  .maintain
+                  .findById(created.appointment().id())
+                  .status()
+                  .name()
+                  .equals("EM_ATENDIMENTO"));
 
       Platform.runLater(() -> robot.lookup("#appointmentNew").queryButton().fire());
       waitForNode(robot, "#appointmentFormTime");
