@@ -3,13 +3,8 @@ package br.com.espacotucuma.desktop.ui;
 import br.com.espacotucuma.desktop.DesktopRuntime;
 import javafx.application.Application;
 import javafx.application.Platform;
-import javafx.geometry.Insets;
 import javafx.scene.Scene;
 import javafx.scene.control.Alert;
-import javafx.scene.control.Button;
-import javafx.scene.control.Label;
-import javafx.scene.layout.BorderPane;
-import javafx.scene.layout.HBox;
 import javafx.stage.Stage;
 
 public final class TucumaDesktopApplication extends Application {
@@ -48,26 +43,19 @@ public final class TucumaDesktopApplication extends Application {
       return;
     }
 
-    Label status = new Label("Sistema de Gestão do Espaço Tucumã");
-    Button logout = new Button("Encerrar sessão");
-    logout.setOnAction(
-        event -> {
+    TucumaMainShell shell =
+        new TucumaMainShell(runtime.sessions().current().orElseThrow().user().name());
+    shell.setLogoutAction(
+        () -> {
           runtime.logout().logout();
           if (LocalLoginDialog.show(stage, runtime.login()).isEmpty()) {
             stage.close();
           } else {
-            status.setText(
-                "Sistema de Gestão do Espaço Tucumã — "
-                    + runtime.sessions().current().orElseThrow().user().name());
+            shell.setUserName(runtime.sessions().current().orElseThrow().user().name());
           }
         });
-    HBox toolbar = new HBox(8, logout);
-    toolbar.setPadding(new Insets(8));
-    BorderPane root = new BorderPane(status);
-    root.setTop(toolbar);
-    TucumaTheme.apply(root);
     stage.setTitle("Tucumã — Gestão");
-    stage.setScene(new Scene(root, 1180, 720));
+    stage.setScene(new Scene(shell.root(), 1180, 720));
     stage.setMinWidth(1024);
     stage.setMinHeight(680);
     stage.show();
