@@ -49,15 +49,16 @@ class HealthEndpointSmokeTest {
         .andExpect(jsonPath("$.status").value("UP"));
 
     assertEquals(
-        6,
+        7,
         jdbc.queryForObject(
             "SELECT COUNT(*) FROM information_schema.tables "
                 + "WHERE table_schema = 'public' AND table_name IN "
                 + "('estabelecimento_remoto', 'dispositivo_autorizado', 'operacao_recebida', "
-                + "'checkpoint_sincronizacao', 'estado_reconciliado', 'backup_remoto')",
+                + "'checkpoint_sincronizacao', 'estado_reconciliado', 'backup_remoto', "
+                + "'entidade_remota_sincronizada')",
             Integer.class));
     assertEquals(
-        2,
+        3,
         jdbc.queryForObject(
             "SELECT COUNT(*) FROM flyway_schema_history WHERE success = true", Integer.class));
     assertTrue(POSTGRES.isRunning());
