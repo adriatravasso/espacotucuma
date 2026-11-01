@@ -34,6 +34,7 @@ final class TucumaMainShell {
   private final Supplier<ProtectionStatus> statusLoader;
   private final Parent clientsView;
   private final Parent professionalsView;
+  private final Parent servicesView;
   private final Timeline statusRefresh;
   private Runnable logoutAction = () -> {};
   private String activeModule = "Início";
@@ -44,22 +45,32 @@ final class TucumaMainShell {
             new ProtectionStatus(
                 userName, Path.of("dados/tucuma.sqlite"), 0, 0, null, 0, null, null),
         null,
+        null,
         null);
   }
 
   TucumaMainShell(Supplier<ProtectionStatus> statusLoader) {
-    this(statusLoader, null, null);
+    this(statusLoader, null, null, null);
   }
 
   TucumaMainShell(Supplier<ProtectionStatus> statusLoader, Parent clientsView) {
-    this(statusLoader, clientsView, null);
+    this(statusLoader, clientsView, null, null);
   }
 
   TucumaMainShell(
       Supplier<ProtectionStatus> statusLoader, Parent clientsView, Parent professionalsView) {
+    this(statusLoader, clientsView, professionalsView, null);
+  }
+
+  TucumaMainShell(
+      Supplier<ProtectionStatus> statusLoader,
+      Parent clientsView,
+      Parent professionalsView,
+      Parent servicesView) {
     this.statusLoader = statusLoader;
     this.clientsView = clientsView;
     this.professionalsView = professionalsView;
+    this.servicesView = servicesView;
     root.setTop(new VBox(createMenuBar(), createToolBar()));
     root.setLeft(createNavigation());
     root.setCenter(workArea);
@@ -103,6 +114,9 @@ final class TucumaMainShell {
     if (activeModule.equals("Profissionais")
         && professionalsView instanceof ProfessionalRegistryPane professionalPane) {
       professionalPane.refreshAccess();
+    }
+    if (activeModule.equals("Serviços") && servicesView instanceof ServiceCatalogPane servicePane) {
+      servicePane.refreshAccess();
     }
   }
 
@@ -213,6 +227,10 @@ final class TucumaMainShell {
         && professionalsView instanceof ProfessionalRegistryPane professionalPane) {
       professionalPane.refreshAccess();
       workArea.setCenter(professionalPane);
+    } else if (module.equals("Serviços")
+        && servicesView instanceof ServiceCatalogPane servicePane) {
+      servicePane.refreshAccess();
+      workArea.setCenter(servicePane);
     } else {
       workArea.setCenter(placeholder);
     }

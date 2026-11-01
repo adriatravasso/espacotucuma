@@ -239,6 +239,20 @@ public final class PagedTablePane<T> extends BorderPane {
     loadPage();
   }
 
+  public void setFilterOptions(Map<String, String> options) {
+    Objects.requireNonNull(options, "options");
+    String selectedLabel = filter.getValue();
+    filterLabels.clear();
+    filterLabels.putAll(options);
+    filter.setItems(FXCollections.observableArrayList(filterLabels.values()));
+    filter
+        .getSelectionModel()
+        .select(
+            selectedLabel != null && filterLabels.containsValue(selectedLabel)
+                ? selectedLabel
+                : filterLabels.values().stream().findFirst().orElse(null));
+  }
+
   public T selectedItem() {
     return table.getSelectionModel().getSelectedItem();
   }

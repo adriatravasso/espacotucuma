@@ -14,7 +14,9 @@ import br.com.espacotucuma.desktop.application.identity.LogoutUseCase;
 import br.com.espacotucuma.desktop.application.identity.SessionContext;
 import br.com.espacotucuma.desktop.application.port.client.ClientRepository;
 import br.com.espacotucuma.desktop.application.port.professional.ProfessionalRepository;
+import br.com.espacotucuma.desktop.application.port.service.ServiceRepository;
 import br.com.espacotucuma.desktop.application.professional.MaintainProfessionalUseCase;
+import br.com.espacotucuma.desktop.application.service.MaintainServiceUseCase;
 import br.com.espacotucuma.desktop.infrastructure.security.Pbkdf2PasswordHasher;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.LocalDatabaseSession;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteAuditRepository;
@@ -24,6 +26,7 @@ import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteLocalCredentialRe
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteOutboxRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteProfessionalRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteProtectionStatusRepository;
+import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteServiceRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteUnitOfWork;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteUserAdministrationRepository;
 import java.io.IOException;
@@ -44,6 +47,8 @@ public final class DesktopRuntime implements AutoCloseable {
   private final ClientRepository clients;
   private final ProfessionalRepository professionals;
   private final MaintainProfessionalUseCase maintainProfessional;
+  private final ServiceRepository services;
+  private final MaintainServiceUseCase maintainService;
   private final AuthorizationService authorization;
   private final CreateFirstAdministratorUseCase createFirstAdministrator;
   private final ChangeLocalPasswordUseCase changeLocalPassword;
@@ -63,6 +68,8 @@ public final class DesktopRuntime implements AutoCloseable {
       ClientRepository clients,
       ProfessionalRepository professionals,
       MaintainProfessionalUseCase maintainProfessional,
+      ServiceRepository services,
+      MaintainServiceUseCase maintainService,
       AuthorizationService authorization,
       CreateFirstAdministratorUseCase createFirstAdministrator,
       ChangeLocalPasswordUseCase changeLocalPassword,
@@ -80,6 +87,8 @@ public final class DesktopRuntime implements AutoCloseable {
     this.clients = clients;
     this.professionals = professionals;
     this.maintainProfessional = maintainProfessional;
+    this.services = services;
+    this.maintainService = maintainService;
     this.authorization = authorization;
     this.createFirstAdministrator = createFirstAdministrator;
     this.changeLocalPassword = changeLocalPassword;
@@ -145,6 +154,16 @@ public final class DesktopRuntime implements AutoCloseable {
               authorization,
               audit,
               stationId);
+      SqliteServiceRepository services =
+          new SqliteServiceRepository(database.connection(), unitOfWork);
+      MaintainServiceUseCase maintainService =
+          new MaintainServiceUseCase(
+              unitOfWork,
+              services,
+              new SqliteOutboxRepository(database.connection(), unitOfWork),
+              authorization,
+              audit,
+              stationId);
       CreateFirstAdministratorUseCase createFirstAdministrator =
           new CreateFirstAdministratorUseCase(
               unitOfWork,
@@ -179,6 +198,8 @@ public final class DesktopRuntime implements AutoCloseable {
           clients,
           professionals,
           maintainProfessional,
+          services,
+          maintainService,
           authorization,
           createFirstAdministrator,
           changeLocalPassword,
@@ -220,6 +241,14 @@ public final class DesktopRuntime implements AutoCloseable {
 
   public MaintainProfessionalUseCase maintainProfessional() {
     return maintainProfessional;
+  }
+
+  public ServiceRepository services() {
+    return services;
+  }
+
+  public MaintainServiceUseCase maintainService() {
+    return maintainService;
   }
 
   public AuthorizationService authorization() {
