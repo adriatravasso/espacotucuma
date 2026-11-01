@@ -19,6 +19,7 @@ Aplicação de gestão Windows-first e offline-first para beleza e estética. A 
 - [Segurança do serviço remoto](docs/SEGURANCA_SERVICO_REMOTO.md).
 - [Ambiente de demonstração](docs/AMBIENTE_DEMONSTRACAO.md) e [validação local](docs/VALIDACAO_LOCAL.md).
 - [Demonstração de portfólio](docs/DEMONSTRACAO_PORTFOLIO.md) — roteiro reproduzível e escopo real dos cenários.
+- [Auditoria final de conformidade](docs/ACEITE_FINAL.md) — evidências e pendências frente à especificação.
 
 ## Build e execução
 
