@@ -25,9 +25,12 @@ import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -41,6 +44,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
     properties = "tucuma.security.sync-secret=bootstrap-test-secret-with-more-than-32-chars")
 @AutoConfigureMockMvc
 @Testcontainers
+@ExtendWith(OutputCaptureExtension.class)
 class DeviceAuthenticationIntegrationTest {
   private static final String ADMIN_SECRET = "bootstrap-test-secret-with-more-than-32-chars";
 
@@ -551,6 +555,115 @@ class DeviceAuthenticationIntegrationTest {
                             secondEnrollment.pairingCode(), "Outra estação"))))
         .andExpect(status().isConflict())
         .andExpect(jsonPath("$.code").value("CONFLICT"));
+  }
+
+  @Test
+  void rateLimitRejectsBeforeOperationBatchCanPersistAndAddsSecurityHeaders() throws Exception {
+    Pairing pairing = pair(enrollNewEstablishment("Salão com limite").pairingCode(), "Principal");
+    AccessToken token = issueAccessToken(pairing);
+    for (int index = 0; index < 120; index++) {
+      mockMvc
+          .perform(
+              get("/sync/status")
+                  .header("Authorization", "Bearer " + token.accessToken())
+                  .header(SyncContract.VERSION_HEADER, "1"))
+          .andExpect(status().isOk());
+    }
+
+    OperationSubmission operation =
+        operation(UUID.randomUUID(), UUID.randomUUID(), 0, "recebimento");
+    mockMvc
+        .perform(
+            post("/sync/operations")
+                .header("Authorization", "Bearer " + token.accessToken())
+                .header(SyncContract.VERSION_HEADER, "1")
+                .contentType("application/json")
+                .content(
+                    objectMapper.writeValueAsString(
+                        new OperationsRequest(1, java.util.List.of(operation)))))
+        .andExpect(status().isTooManyRequests())
+        .andExpect(header().string("Retry-After", "60"))
+        .andExpect(header().string("X-Content-Type-Options", "nosniff"))
+        .andExpect(header().string("X-Frame-Options", "DENY"))
+        .andExpect(header().string("Referrer-Policy", "no-referrer"))
+        .andExpect(jsonPath("$.code").value("RETRY_LATER"));
+    assertEquals(
+        0,
+        jdbc.queryForObject(
+            "SELECT COUNT(*) FROM operacao_recebida WHERE id = ?",
+            Integer.class,
+            operation.operationId()));
+  }
+
+  @Test
+  void oversizedOperationBatchIsRejectedBeforeAnyOperationIsStored() throws Exception {
+    Pairing pairing =
+        pair(enrollNewEstablishment("Salão com lote limitado").pairingCode(), "Principal");
+    AccessToken token = issueAccessToken(pairing);
+    var operations =
+        java.util.stream.IntStream.range(0, 101)
+            .mapToObj(index -> operation(UUID.randomUUID(), UUID.randomUUID(), 0, "cliente"))
+            .toList();
+
+    mockMvc
+        .perform(
+            post("/sync/operations")
+                .header("Authorization", "Bearer " + token.accessToken())
+                .header(SyncContract.VERSION_HEADER, "1")
+                .contentType("application/json")
+                .content(objectMapper.writeValueAsString(new OperationsRequest(1, operations))))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+    assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM operacao_recebida", Integer.class));
+  }
+
+  @Test
+  void oneEstablishmentTokenCannotReadAnotherEstablishmentsOperations() throws Exception {
+    Pairing firstPairing = pair(enrollNewEstablishment("Salão A").pairingCode(), "Principal A");
+    AccessToken firstToken = issueAccessToken(firstPairing);
+    OperationSubmission operation =
+        operation(UUID.randomUUID(), UUID.randomUUID(), 0, "agendamento");
+    submitOperations(firstToken, new OperationsRequest(1, java.util.List.of(operation)));
+
+    Pairing secondPairing = pair(enrollNewEstablishment("Salão B").pairingCode(), "Principal B");
+    AccessToken secondToken = issueAccessToken(secondPairing);
+    mockMvc
+        .perform(
+            get("/sync/operations/status")
+                .param("ids", operation.operationId().toString())
+                .header("Authorization", "Bearer " + secondToken.accessToken())
+                .header(SyncContract.VERSION_HEADER, "1"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.results").isEmpty());
+    mockMvc
+        .perform(
+            get("/sync/changes")
+                .param("after", "0")
+                .header("Authorization", "Bearer " + secondToken.accessToken())
+                .header(SyncContract.VERSION_HEADER, "1"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.checkpoint").value(0))
+        .andExpect(jsonPath("$.changes").isEmpty());
+  }
+
+  @Test
+  void successfulAccessLogsDeviceContextWithoutLoggingItsAccessToken(CapturedOutput output)
+      throws Exception {
+    Pairing pairing = pair(enrollNewEstablishment("Salão de auditoria").pairingCode(), "Principal");
+    AccessToken token = issueAccessToken(pairing);
+
+    mockMvc
+        .perform(
+            get("/sync/status")
+                .header("Authorization", "Bearer " + token.accessToken())
+                .header(SyncContract.VERSION_HEADER, "1"))
+        .andExpect(status().isOk());
+
+    assertTrue(output.toString().contains("Sync access accepted"));
+    assertTrue(output.toString().contains(pairing.deviceId().toString()));
+    assertFalse(output.toString().contains(token.accessToken()));
+    assertFalse(output.toString().contains(pairing.deviceCredential()));
+    assertFalse(output.toString().contains(ADMIN_SECRET));
   }
 
   private Enrollment enrollNewEstablishment(String name) throws Exception {
