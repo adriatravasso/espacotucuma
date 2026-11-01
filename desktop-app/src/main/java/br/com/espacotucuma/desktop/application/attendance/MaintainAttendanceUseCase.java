@@ -393,6 +393,13 @@ public final class MaintainAttendanceUseCase {
         .orElseThrow(() -> new IllegalArgumentException("Atendimento não encontrado."));
   }
 
+  public Attendance findByAppointment(UUID appointmentId) {
+    authorization.require(Permission.ATTENDANCE_RECORD);
+    return attendances
+        .findByAppointment(Objects.requireNonNull(appointmentId, "appointmentId"))
+        .orElseThrow(() -> new IllegalArgumentException("Atendimento associado não encontrado."));
+  }
+
   public List<AttendanceServiceLine> findServices(UUID attendanceId) {
     authorization.require(Permission.ATTENDANCE_RECORD);
     return attendances.findServices(attendanceId);

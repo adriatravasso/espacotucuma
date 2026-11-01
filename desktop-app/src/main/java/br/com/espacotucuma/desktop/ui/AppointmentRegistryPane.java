@@ -22,6 +22,9 @@ import br.com.espacotucuma.desktop.application.scheduling.MaintainAppointmentUse
 import br.com.espacotucuma.desktop.application.service.BeautyService;
 import br.com.espacotucuma.desktop.application.service.ServicePageQuery;
 import br.com.espacotucuma.desktop.application.service.ServiceSortField;
+import br.com.espacotucuma.desktop.domain.money.Money;
+import br.com.espacotucuma.desktop.infrastructure.reporting.LocalArtifactWriter;
+import java.io.IOException;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -50,6 +53,7 @@ import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
+import javafx.stage.FileChooser;
 import javafx.util.StringConverter;
 
 /** Offline-first local schedule for the reception desk. */
@@ -79,6 +83,7 @@ public final class AppointmentRegistryPane extends BorderPane {
   private final Button reschedule = button("Remarcar", "appointmentReschedule");
   private final Button cancel = button("Cancelar", "appointmentCancel");
   private final Button receive = button("Recebimentos", "appointmentReceive");
+  private final Button receipt = button("Comprovante PDF", "appointmentReceipt");
   private Runnable mutationListener = () -> {};
 
   public AppointmentRegistryPane(
@@ -134,6 +139,7 @@ public final class AppointmentRegistryPane extends BorderPane {
     reschedule.setOnAction(event -> rescheduleAppointment());
     cancel.setOnAction(event -> cancelAppointment());
     receive.setOnAction(event -> showPayments());
+    receipt.setOnAction(event -> exportReceipt());
     Button details = button("Detalhes", "appointmentDetails");
     details.setOnAction(event -> showDetails());
     table
@@ -158,7 +164,7 @@ public final class AppointmentRegistryPane extends BorderPane {
         new HBox(7, previous, today, next, date, period, professionalFilter, statusFilter);
     filters.setPadding(new Insets(8));
     HBox commands =
-        new HBox(6, create, confirm, start, receive, noShow, reschedule, cancel, details);
+        new HBox(6, create, confirm, start, receive, receipt, noShow, reschedule, cancel, details);
     commands.setPadding(new Insets(6, 8, 6, 8));
     availability.setWrapText(true);
     availability.setPadding(new Insets(7, 9, 7, 9));
@@ -509,6 +515,69 @@ public final class AppointmentRegistryPane extends BorderPane {
     }
   }
 
+  private void exportReceipt() {
+    AppointmentRow row = selected();
+    if (row == null
+        || row.appointment().status() != AppointmentStatus.CONCLUIDO
+        || !authorization.isAllowed(Permission.ATTENDANCE_RECORD)) return;
+    String filename =
+        "tucuma-comprovante-"
+            + row.appointment().startsAt().toLocalDate()
+            + "-"
+            + row.appointment().id().toString().substring(0, 8)
+            + ".pdf";
+    FileChooser chooser = new FileChooser();
+    chooser.setTitle("Salvar comprovante interno não fiscal");
+    chooser.setInitialFileName(filename);
+    chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter("PDF (*.pdf)", "*.pdf"));
+    java.io.File destination =
+        chooser.showSaveDialog(getScene() == null ? null : getScene().getWindow());
+    if (destination == null) return;
+    try {
+      Attendance attendance = attendanceUseCase.findByAppointment(row.appointment().id());
+      List<br.com.espacotucuma.desktop.application.attendance.AttendanceServiceLine> lines =
+          attendanceUseCase.findServices(attendance.id());
+      List<String> document = new ArrayList<>();
+      document.add("Comprovante interno de atendimento — Espaço Tucumã");
+      document.add("Cliente: " + row.clientName());
+      document.add("Profissional: " + row.professionalName());
+      document.add(
+          "Data do atendimento: "
+              + row.appointment()
+                  .startsAt()
+                  .format(DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm")));
+      document.add(
+          "Concluído em: "
+              + DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm")
+                  .withZone(BUSINESS_ZONE)
+                  .format(attendance.completedAt()));
+      document.add("");
+      document.add("Serviços:");
+      for (var line : lines) {
+        document.add(
+            line.quantity()
+                + " x "
+                + line.nameSnapshot()
+                + " — "
+                + money(line.unitPrice())
+                + " — Total "
+                + money(line.total()));
+      }
+      document.add("");
+      document.add("Subtotal: " + money(attendance.subtotal()));
+      document.add("Desconto: " + money(attendance.discount()));
+      document.add("Total do serviço: " + money(attendance.total()));
+      document.add("");
+      LocalArtifactWriter.writeReceiptPdf(destination.toPath(), document);
+      message.setText("Comprovante não fiscal salvo: " + destination.getName());
+    } catch (IOException | RuntimeException failure) {
+      message.setText(
+          failure.getMessage() == null
+              ? "Falha ao salvar o comprovante; os dados do atendimento foram preservados."
+              : "Falha ao salvar o comprovante: " + failure.getMessage());
+    }
+  }
+
   private void run(Runnable action) {
     try {
       action.run();
@@ -549,6 +618,10 @@ public final class AppointmentRegistryPane extends BorderPane {
         !authorization.isAllowed(Permission.PAYMENT_RECORD)
             || row == null
             || row.appointment().status() != AppointmentStatus.CONCLUIDO);
+    receipt.setDisable(
+        !authorization.isAllowed(Permission.ATTENDANCE_RECORD)
+            || row == null
+            || row.appointment().status() != AppointmentStatus.CONCLUIDO);
     noShow.setDisable(!canManage || !pending);
     reschedule.setDisable(!canManage || !pending);
     cancel.setDisable(!canManage || !pending);
@@ -558,6 +631,10 @@ public final class AppointmentRegistryPane extends BorderPane {
     Button button = new Button(title);
     button.setId(id);
     return button;
+  }
+
+  private static String money(Money money) {
+    return "R$ " + money.amount().setScale(2).toPlainString().replace('.', ',');
   }
 
   private static <T> TableColumn<AppointmentRow, String> column(
