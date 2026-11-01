@@ -33,6 +33,7 @@
         <google-java-format.version>1.36.1</google-java-format.version>
         <sqlite-jdbc.version>3.54.1.0</sqlite-jdbc.version>
         <flyway.version>13.11.1</flyway.version>
+        <jna.version>5.19.1</jna.version>
     </properties>
 
     <dependencyManagement>
@@ -86,6 +87,16 @@
                 <groupId>org.flywaydb</groupId>
                 <artifactId>flyway-database-nc-sqlite</artifactId>
                 <version>${flyway.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>net.java.dev.jna</groupId>
+                <artifactId>jna</artifactId>
+                <version>${jna.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>net.java.dev.jna</groupId>
+                <artifactId>jna-platform</artifactId>
+                <version>${jna.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
