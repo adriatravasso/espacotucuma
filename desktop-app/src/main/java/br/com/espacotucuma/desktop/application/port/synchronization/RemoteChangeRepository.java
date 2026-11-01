@@ -6,4 +6,8 @@ public interface RemoteChangeRepository {
   long checkpoint();
 
   void applyPage(long expectedCheckpoint, ChangesResponse page);
+
+  default int unresolvedConflictCount() {
+    return 0;
+  }
 }
