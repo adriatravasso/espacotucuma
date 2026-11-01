@@ -39,6 +39,7 @@ final class TucumaMainShell {
   private final Parent appointmentsView;
   private final Parent cashView;
   private final Parent reportsView;
+  private final Parent inventoryView;
   private final Timeline statusRefresh;
   private Runnable logoutAction = () -> {};
   private String activeModule = "Início";
@@ -128,6 +129,28 @@ final class TucumaMainShell {
       Parent appointmentsView,
       Parent cashView,
       Parent reportsView) {
+    this(
+        statusLoader,
+        clientsView,
+        professionalsView,
+        servicesView,
+        packagesView,
+        appointmentsView,
+        cashView,
+        reportsView,
+        null);
+  }
+
+  TucumaMainShell(
+      Supplier<ProtectionStatus> statusLoader,
+      Parent clientsView,
+      Parent professionalsView,
+      Parent servicesView,
+      Parent packagesView,
+      Parent appointmentsView,
+      Parent cashView,
+      Parent reportsView,
+      Parent inventoryView) {
     this.statusLoader = statusLoader;
     this.clientsView = clientsView;
     this.professionalsView = professionalsView;
@@ -136,6 +159,7 @@ final class TucumaMainShell {
     this.appointmentsView = appointmentsView;
     this.cashView = cashView;
     this.reportsView = reportsView;
+    this.inventoryView = inventoryView;
     root.setTop(new VBox(createMenuBar(), createToolBar()));
     root.setLeft(createNavigation());
     root.setCenter(workArea);
@@ -197,6 +221,8 @@ final class TucumaMainShell {
         && reportsView instanceof CommissionStatementPane commissionPane) {
       commissionPane.refresh();
     }
+    if (activeModule.equals("Estoque") && inventoryView instanceof InventoryPane inventoryPane)
+      inventoryPane.refreshAccess();
   }
 
   private MenuBar createMenuBar() {
@@ -327,6 +353,10 @@ final class TucumaMainShell {
         && reportsView instanceof CommissionStatementPane commissionPane) {
       commissionPane.refresh();
       workArea.setCenter(commissionPane);
+    } else if (module.equals("Estoque") && inventoryView instanceof InventoryPane inventoryPane) {
+      inventoryPane.refreshAccess();
+      inventoryPane.refresh();
+      workArea.setCenter(inventoryPane);
     } else {
       workArea.setCenter(placeholder);
     }

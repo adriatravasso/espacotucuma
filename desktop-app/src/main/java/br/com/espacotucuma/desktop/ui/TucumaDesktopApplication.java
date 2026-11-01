@@ -66,6 +66,9 @@ public final class TucumaDesktopApplication extends Application {
         new CashRegisterPane(runtime.manageCashTurn(), runtime.authorization());
     CommissionStatementPane commissionStatementPane =
         new CommissionStatementPane(runtime.closeCommissionCompetency(), runtime.authorization());
+    InventoryPane inventoryPane =
+        new InventoryPane(
+            runtime.inventory(), runtime.maintainInventory(), runtime.authorization());
     shell =
         new TucumaMainShell(
             runtime::protectionStatus,
@@ -87,7 +90,8 @@ public final class TucumaDesktopApplication extends Application {
             packagesView,
             appointmentPane,
             cashPane,
-            commissionStatementPane);
+            commissionStatementPane,
+            inventoryPane);
     appointmentPane.setMutationListener(shell::refreshStatus);
     shell.setLogoutAction(
         () -> {
