@@ -12,15 +12,15 @@ Os dados ficam fora da pasta do aplicativo, no perfil do usuário Windows. Não 
 
 Na primeira abertura de um banco novo, aparece **Configuração inicial**. Informe o estabelecimento, nome da pessoa administradora, login e senha. A senha deve ter pelo menos 12 caracteres; confirme-a e selecione **Criar administrador**. Guarde a senha em local protegido. A configuração é feita uma vez para aquele banco.
 
-![Tela real de configuração inicial, sem dados preenchidos](manual-imagens/primeiro-acesso.png)
+![Tela real de configuração inicial, sem dados preenchidos](../imagens/manual/primeiro-acesso.png)
 
 Depois, entre com o login e a senha locais. O login funciona sem internet. Use **Sair** ao encerrar o turno e não compartilhe a conta de outra pessoa.
 
-![Tela real de login, sem dados preenchidos](manual-imagens/login.png)
+![Tela real de login, sem dados preenchidos](../imagens/manual/login.png)
 
 Após entrar, confira a barra inferior: **Banco local: OK**, pendências, última sincronização, último backup validado e a indicação **Somente neste computador**. “Nunca” em última sincronização ou backup significa que ainda não há registro confirmado daquele processo.
 
-![Tela inicial real com dados sintéticos](manual-imagens/inicio.png)
+![Tela inicial real com dados sintéticos](../imagens/manual/inicio.png)
 
 ## 3. Cadastros
 
@@ -32,7 +32,7 @@ Abra **Clientes** e selecione **Novo**. O nome é obrigatório; telefone e conta
 
 Exemplo fictício: `Cliente Exemplo`. Não use dados reais em treinamento.
 
-![Cadastro real de clientes vazio](manual-imagens/clientes.png)
+![Cadastro real de clientes vazio](../imagens/manual/clientes.png)
 
 ### Profissionais e serviços
 
@@ -40,7 +40,7 @@ Em **Profissionais**, selecione **Novo** e preencha os dados solicitados. Config
 
 Em **Serviços**, selecione **Novo**, informe nome, duração e preço conforme os campos da tela. Confira o valor e a duração antes de salvar. Para corrigir um item existente, selecione-o e use **Editar**. A inativação mantém o histórico.
 
-![Cadastro real de profissionais vazio](manual-imagens/profissionais.png)
+![Cadastro real de profissionais vazio](../imagens/manual/profissionais.png)
 
 ## 4. Agenda e atendimento
 
@@ -48,9 +48,9 @@ Abra **Agenda**. Escolha o dia, **Hoje** ou a visão de dia/semana e, se necess�
 
 O sistema avisa sobre conflitos de horário. Uma exceção administrativa exige justificativa; use-a apenas se tiver autorização e após conferir os horários envolvidos.
 
-![Agenda real vazia em visão diária](manual-imagens/agenda.png)
+![Agenda real vazia em visão diária](../imagens/manual/agenda.png)
 
-![Formulário real de novo agendamento](manual-imagens/novo-agendamento.png)
+![Formulário real de novo agendamento](../imagens/manual/novo-agendamento.png)
 
 Na linha do agendamento selecionado, as ações disponíveis incluem iniciar atendimento, recebimentos, comprovante, registrar falta, remarcar ou cancelar. Use **Não compareceu** somente quando a pessoa não tiver vindo; para mudar um horário, use **Remarcar**. Confira a seleção e os valores antes de registrar recebimentos. Agendar ou concluir um serviço, por si só, não significa que houve pagamento.
 
@@ -60,7 +60,7 @@ Abra **Caixa** e confira se já existe um turno aberto para você. Para iniciar 
 
 No fim do turno, conte separadamente dinheiro, Pix e cartão. Preencha os valores contados em cada campo. Se houver diferença, escreva uma justificativa. Confira os totais e selecione **Fechar e conferir**. O resumo do turno representa valores recebidos; não é cálculo de lucro. Reabertura ou estorno pode exigir perfil autorizado.
 
-![Caixa real sem turno aberto](manual-imagens/caixa.png)
+![Caixa real sem turno aberto](../imagens/manual/caixa.png)
 
 ## 6. Estoque
 
@@ -68,7 +68,7 @@ Abra **Estoque**. Em **Novo produto**, informe nome, unidade, custo, estoque mí
 
 Para aumentar o saldo após uma compra, selecione o produto na tabela e escolha **Registrar entrada**. Para consumo ou correção, use **Saída/ajuste**, selecione o tipo, informe quantidade e motivo. Confirme antes de registrar: cada movimentação altera o saldo e fica no histórico. **REPOR** indica saldo igual ou abaixo do mínimo. Inativar um produto não apaga seus movimentos.
 
-![Estoque real vazio](manual-imagens/estoque.png)
+![Estoque real vazio](../imagens/manual/estoque.png)
 
 Se a operação usar consumo de material por serviço, configure **Materiais por serviço** com a quantidade por atendimento. Confira a unidade do produto. Essa configuração não substitui a conferência física do estoque.
 
@@ -91,7 +91,7 @@ A estação precisa estar pareada e configurada previamente pela equipe técnica
 
 **Sincronização não é sinônimo de backup.** Consulte na barra inferior o campo **Último backup validado**. Na janela de sincronização, **Consultar backups disponíveis** somente lista pontos remotos; não baixa nem restaura dados.
 
-![Janela real de sincronização, estação sem pareamento configurado](manual-imagens/sincronizacao.png)
+![Janela real de sincronização, estação sem pareamento configurado](../imagens/manual/sincronizacao.png)
 
 ## 9. Perda do computador e recuperação
 

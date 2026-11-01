@@ -1,6 +1,6 @@
 # Arquitetura e decisões técnicas
 
-Esta página descreve a implementação e os trade-offs observáveis no código. **A especificação do produto continua sendo a única fonte normativa:** [Especificação Espaço Tucumã](ESPECIFICACAO_ESPACO_TUCUMA.md). As tabelas e estados abaixo refletem as migrações e os tipos atuais e podem evoluir com o código.
+Esta página descreve a implementação e os trade-offs observáveis no código. **A especificação do produto continua sendo a única fonte normativa:** [Especificação Espaço Tucumã](../ESPECIFICACAO_ESPACO_TUCUMA.md). As tabelas e estados abaixo refletem as migrações e os tipos atuais e podem evoluir com o código.
 
 ## 1. Contexto — C4 nível 1
 
@@ -200,4 +200,4 @@ O serviço protege os endpoints de restauração com autenticação da estação
 - **Auditoria:** decisões locais de conflito preservam a representação remota e registram usuário, motivo e evento de auditoria.
 - **Restauração assistida:** o serviço não considera sincronização equivalente a backup concluído; é necessário ponto remoto validado. Alterações desde esse checkpoint podem se perder numa falha total da estação.
 
-Consulte [Segurança do serviço remoto](SEGURANCA_SERVICO_REMOTO.md) para implantação, configuração e resposta a incidentes. Para comandos e jornadas operacionais, use o [Manual operacional](MANUAL_OPERACIONAL.md) e [Backup e recuperação](RECUPERACAO_E_BACKUP.md).
+Consulte [Segurança do serviço remoto](../operacao/SEGURANCA_SERVICO_REMOTO.md) para implantação, configuração e resposta a incidentes. Para comandos e jornadas operacionais, use o [Manual operacional](../operacao/MANUAL_OPERACIONAL.md) e [Backup e recuperação](../operacao/RECUPERACAO_E_BACKUP.md).

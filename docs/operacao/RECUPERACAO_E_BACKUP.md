@@ -15,7 +15,7 @@
 3. Se a sincronização falhar ou o campo continuar antigo, anote a hora, a mensagem apresentada e a quantidade de pendências. Avise o suporte autorizado.
 4. Não apague, reinstale ou copie por cima da pasta de dados como tentativa de correção.
 
-![Barra de status e estado local exibidos no aplicativo](manual-imagens/inicio.png)
+![Barra de status e estado local exibidos no aplicativo](../imagens/manual/inicio.png)
 
 ## Se o computador não iniciar ou o banco local estiver indisponível
 
