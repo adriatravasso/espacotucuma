@@ -194,6 +194,7 @@ final class TucumaMainShell {
 
   void stopStatusRefresh() {
     statusRefresh.stop();
+    if (reportsView instanceof ReportsModulePane reportsPane) reportsPane.close();
   }
 
   void refreshActiveModuleAccess() {
@@ -217,9 +218,8 @@ final class TucumaMainShell {
     if (activeModule.equals("Caixa") && cashView instanceof CashRegisterPane cashPane) {
       cashPane.refresh();
     }
-    if (activeModule.equals("Relatórios")
-        && reportsView instanceof CommissionStatementPane commissionPane) {
-      commissionPane.refresh();
+    if (activeModule.equals("Relatórios") && reportsView instanceof ReportsModulePane reportsPane) {
+      reportsPane.refresh();
     }
     if (activeModule.equals("Estoque") && inventoryView instanceof InventoryPane inventoryPane)
       inventoryPane.refreshAccess();
@@ -350,9 +350,9 @@ final class TucumaMainShell {
       cashPane.refresh();
       workArea.setCenter(cashPane);
     } else if (module.equals("Relatórios")
-        && reportsView instanceof CommissionStatementPane commissionPane) {
-      commissionPane.refresh();
-      workArea.setCenter(commissionPane);
+        && reportsView instanceof ReportsModulePane reportsPane) {
+      reportsPane.refresh();
+      workArea.setCenter(reportsPane);
     } else if (module.equals("Estoque") && inventoryView instanceof InventoryPane inventoryPane) {
       inventoryPane.refreshAccess();
       inventoryPane.refresh();
