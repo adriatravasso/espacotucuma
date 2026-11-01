@@ -4,5 +4,5 @@ import java.time.Instant;
 
 @FunctionalInterface
 public interface TimeProvider {
-    Instant now();
+  Instant now();
 }

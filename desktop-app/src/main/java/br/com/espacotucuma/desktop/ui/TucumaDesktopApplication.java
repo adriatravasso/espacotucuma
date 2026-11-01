@@ -10,20 +10,20 @@ import javafx.stage.Stage;
 
 public final class TucumaDesktopApplication extends Application {
 
-    @Override
-    public void start(Stage stage) {
-        BorderPane root = new BorderPane(new Label("Sistema de Gestão do Espaço Tucumã"));
-        stage.setTitle("Tucumã — Gestão");
-        stage.setScene(new Scene(root, 900, 600));
-        stage.show();
+  @Override
+  public void start(Stage stage) {
+    BorderPane root = new BorderPane(new Label("Sistema de Gestão do Espaço Tucumã"));
+    stage.setTitle("Tucumã — Gestão");
+    stage.setScene(new Scene(root, 900, 600));
+    stage.show();
 
-        if (getParameters().getRaw().contains("--smoke-test")) {
-            Platform.runLater(stage::close);
-        }
+    if (getParameters().getRaw().contains("--smoke-test")) {
+      Platform.runLater(stage::close);
     }
+  }
 
-    public static void main(String[] args) {
-        DesktopEnvironment.current();
-        launch(args);
-    }
+  public static void main(String[] args) {
+    DesktopEnvironment.current();
+    launch(args);
+  }
 }

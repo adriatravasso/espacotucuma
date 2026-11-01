@@ -4,5 +4,5 @@ import java.util.Optional;
 import java.util.UUID;
 
 public interface CurrentUserProvider {
-    Optional<UUID> currentUserId();
+  Optional<UUID> currentUserId();
 }
