@@ -19,6 +19,12 @@ class SyncApiExceptionHandler {
         .body(new ApiErrorResponse(SyncErrorCode.CONTRACT_VERSION_UNSUPPORTED));
   }
 
+  @ExceptionHandler(DeviceAuthorizationException.class)
+  ResponseEntity<ApiErrorResponse> unauthorizedDevice() {
+    return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+        .body(new ApiErrorResponse(SyncErrorCode.AUTHORIZATION_REQUIRED));
+  }
+
   @ExceptionHandler({
     HttpMessageNotReadableException.class,
     MethodArgumentTypeMismatchException.class,

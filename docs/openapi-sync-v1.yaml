@@ -5,7 +5,8 @@ info:
   description: >-
     Manual synchronization contract. The DTOs contain protocol data only and do not expose
     SQL tables or persistence entities. Routes marked 501 are defined but implemented by later
-    synchronization queue tasks.
+    synchronization queue tasks. The operations endpoint commits each operation in its own
+    transaction; a later database failure leaves earlier committed results available for replay.
 security:
   - deviceBearer: []
 paths:
@@ -40,7 +41,6 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/OperationsResponse' }
-        '501': { $ref: '#/components/responses/ApiError' }
         default: { $ref: '#/components/responses/ApiError' }
   /sync/changes:
     get:
@@ -183,10 +183,11 @@ components:
     OperationResult:
       type: object
       additionalProperties: false
-      required: [operationId, outcome]
+      required: [operationId, outcome, remoteVersion]
       properties:
         operationId: { type: string, format: uuid }
         outcome: { type: string, enum: [ACCEPTED, REJECTED, CONFLICT] }
+        remoteVersion: { type: integer, format: int64, minimum: 0 }
         errorCode: { $ref: '#/components/schemas/ErrorCode' }
     ChangesResponse:
       type: object

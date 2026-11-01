@@ -10,12 +10,17 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import br.com.espacotucuma.sync.contract.OperationResult;
+import br.com.espacotucuma.sync.contract.OperationSubmission;
+import br.com.espacotucuma.sync.contract.OperationsRequest;
+import br.com.espacotucuma.sync.contract.OperationsResponse;
 import br.com.espacotucuma.sync.contract.SyncContract;
 import br.com.espacotucuma.sync.contract.SyncErrorCode;
 import br.com.espacotucuma.sync.contract.SyncStatusResponse;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -55,6 +60,7 @@ class DeviceAuthenticationIntegrationTest {
 
   @BeforeEach
   void clearRemoteIdentity() {
+    jdbc.update("DELETE FROM entidade_remota_sincronizada");
     jdbc.update("DELETE FROM token_acesso_dispositivo");
     jdbc.update("DELETE FROM codigo_pareamento");
     jdbc.update("DELETE FROM operacao_recebida");
@@ -163,20 +169,27 @@ class DeviceAuthenticationIntegrationTest {
             + "\",\"idempotencyKey\":\"idem-1\",\"entityType\":\"cliente\","
             + "\"entityId\":\""
             + UUID.randomUUID()
-            + "\",\"operationType\":\"upsert\",\"entityVersion\":1,"
+            + "\",\"operationType\":\"upsert\",\"entityVersion\":0,"
             + "\"payloadVersion\":1,\"payload\":{\"name\":\"Dado sintético\"}}";
     String validBatch = "{\"contractVersion\":1,\"operations\":[" + validOperation + "]}";
 
-    mockMvc
-        .perform(
-            post("/sync/operations")
-                .header("Authorization", authorization)
-                .header(SyncContract.VERSION_HEADER, "1")
-                .contentType("application/json")
-                .content(validBatch))
-        .andExpect(status().isNotImplemented())
-        .andExpect(jsonPath("$.code").value("NOT_IMPLEMENTED"))
-        .andExpect(jsonPath("$.retryable").value(false));
+    MvcResult accepted =
+        mockMvc
+            .perform(
+                post("/sync/operations")
+                    .header("Authorization", authorization)
+                    .header(SyncContract.VERSION_HEADER, "1")
+                    .contentType("application/json")
+                    .content(validBatch))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.contractVersion").value(1))
+            .andExpect(jsonPath("$.results[0].outcome").value("ACCEPTED"))
+            .andExpect(jsonPath("$.results[0].remoteVersion").value(1))
+            .andReturn();
+    OperationsResponse acceptedResponse =
+        objectMapper.readValue(
+            accepted.getResponse().getContentAsString(), OperationsResponse.class);
+    assertEquals(1, acceptedResponse.results().size());
 
     mockMvc
         .perform(
@@ -217,6 +230,152 @@ class DeviceAuthenticationIntegrationTest {
     assertFalse(SyncErrorCode.AUTHORIZATION_REQUIRED.retryable());
     assertFalse(SyncErrorCode.CONFLICT.retryable());
     assertFalse(SyncErrorCode.VALIDATION_FAILED.retryable());
+  }
+
+  @Test
+  void repeatedOperationReturnsPersistedResultWithoutApplyingItsEffectTwice() throws Exception {
+    Enrollment enrollment = enrollNewEstablishment("Salão idempotente");
+    Pairing pairing = pair(enrollment.pairingCode(), "Principal");
+    AccessToken token = issueAccessToken(pairing);
+    UUID entityId = UUID.randomUUID();
+    OperationSubmission operation = operation(UUID.randomUUID(), entityId, 0, "recebimento");
+    OperationsRequest request = new OperationsRequest(1, java.util.List.of(operation));
+
+    OperationsResponse first = submitOperations(token, request);
+    OperationsResponse replay = submitOperations(token, request);
+
+    assertEquals(first.results(), replay.results());
+    assertEquals(OperationResult.Outcome.ACCEPTED, replay.results().getFirst().outcome());
+    assertEquals(1, replay.results().getFirst().remoteVersion());
+    assertEquals(first.checkpoint(), replay.checkpoint());
+    assertEquals(
+        1,
+        jdbc.queryForObject(
+            "SELECT COUNT(*) FROM operacao_recebida WHERE id = ?",
+            Integer.class,
+            operation.operationId()));
+    assertEquals(
+        1,
+        jdbc.queryForObject(
+            "SELECT versao FROM entidade_remota_sincronizada "
+                + "WHERE estabelecimento_id = ? AND entidade = 'recebimento' AND entidade_id = ?",
+            Integer.class,
+            enrollment.establishmentId(),
+            entityId));
+  }
+
+  @Test
+  void staleEntityVersionIsPersistedAsConflictWithoutOverwritingRemoteState() throws Exception {
+    Enrollment enrollment = enrollNewEstablishment("Salão com versão");
+    Pairing pairing = pair(enrollment.pairingCode(), "Principal");
+    AccessToken token = issueAccessToken(pairing);
+    UUID entityId = UUID.randomUUID();
+    submitOperations(
+        token,
+        new OperationsRequest(
+            1, java.util.List.of(operation(UUID.randomUUID(), entityId, 0, "agendamento"))));
+    OperationSubmission stale = operation(UUID.randomUUID(), entityId, 0, "agendamento");
+
+    OperationsResponse response =
+        submitOperations(token, new OperationsRequest(1, java.util.List.of(stale)));
+
+    assertEquals(OperationResult.Outcome.CONFLICT, response.results().getFirst().outcome());
+    assertEquals(SyncErrorCode.CONFLICT, response.results().getFirst().errorCode());
+    assertEquals(1, response.results().getFirst().remoteVersion());
+    assertEquals(
+        1,
+        jdbc.queryForObject(
+            "SELECT versao FROM entidade_remota_sincronizada "
+                + "WHERE estabelecimento_id = ? AND entidade = 'agendamento' AND entidade_id = ?",
+            Integer.class,
+            enrollment.establishmentId(),
+            entityId));
+  }
+
+  @Test
+  void databaseFailureRollsBackCurrentOperationAndRetryContinuesFromPersistedCheckpoint()
+      throws Exception {
+    Enrollment enrollment = enrollNewEstablishment("Salão transacional");
+    Pairing pairing = pair(enrollment.pairingCode(), "Principal");
+    AccessToken token = issueAccessToken(pairing);
+    UUID firstEntityId = UUID.randomUUID();
+    UUID failedEntityId = UUID.randomUUID();
+    OperationSubmission first = operation(UUID.randomUUID(), firstEntityId, 0, "recebimento");
+    OperationSubmission second = operation(UUID.randomUUID(), failedEntityId, 0, "estorno");
+    OperationsRequest request = new OperationsRequest(1, java.util.List.of(first, second));
+
+    jdbc.execute(
+        "CREATE FUNCTION fail_sync_entity_for_test() RETURNS trigger LANGUAGE plpgsql AS $$ "
+            + "BEGIN IF NEW.entidade_id = '"
+            + failedEntityId
+            + "'::uuid THEN RAISE EXCEPTION 'simulated database failure'; END IF; "
+            + "RETURN NEW; END $$");
+    jdbc.execute(
+        "CREATE TRIGGER fail_sync_entity_for_test BEFORE INSERT OR UPDATE "
+            + "ON entidade_remota_sincronizada FOR EACH ROW "
+            + "EXECUTE FUNCTION fail_sync_entity_for_test()");
+    try {
+      mockMvc
+          .perform(
+              post("/sync/operations")
+                  .header("Authorization", "Bearer " + token.accessToken())
+                  .header(SyncContract.VERSION_HEADER, "1")
+                  .contentType("application/json")
+                  .content(objectMapper.writeValueAsString(request)))
+          .andExpect(status().isInternalServerError())
+          .andExpect(jsonPath("$.code").value("INTERNAL_ERROR"))
+          .andExpect(jsonPath("$.retryable").value(true));
+
+      assertEquals(
+          1,
+          jdbc.queryForObject(
+              "SELECT COUNT(*) FROM operacao_recebida WHERE id = ?",
+              Integer.class,
+              first.operationId()));
+      assertEquals(
+          0,
+          jdbc.queryForObject(
+              "SELECT COUNT(*) FROM operacao_recebida WHERE id = ?",
+              Integer.class,
+              second.operationId()));
+      long persistedCheckpoint =
+          jdbc.queryForObject(
+              "SELECT ultima_sequencia FROM checkpoint_sincronizacao WHERE estabelecimento_id = ? "
+                  + "AND dispositivo_id = ?",
+              Long.class,
+              enrollment.establishmentId(),
+              pairing.deviceId());
+      assertEquals(
+          1,
+          jdbc.queryForObject(
+              "SELECT COUNT(*) FROM entidade_remota_sincronizada "
+                  + "WHERE estabelecimento_id = ? AND entidade_id = ?",
+              Integer.class,
+              enrollment.establishmentId(),
+              firstEntityId));
+
+      jdbc.execute("DROP TRIGGER fail_sync_entity_for_test ON entidade_remota_sincronizada");
+      jdbc.execute("DROP FUNCTION fail_sync_entity_for_test()");
+      OperationsResponse retried = submitOperations(token, request);
+
+      assertEquals(2, retried.results().size());
+      assertEquals(OperationResult.Outcome.ACCEPTED, retried.results().get(0).outcome());
+      assertEquals(OperationResult.Outcome.ACCEPTED, retried.results().get(1).outcome());
+      assertEquals(1, retried.results().get(0).remoteVersion());
+      assertEquals(1, retried.results().get(1).remoteVersion());
+      assertTrue(retried.checkpoint() > persistedCheckpoint);
+      assertEquals(
+          2,
+          jdbc.queryForObject(
+              "SELECT COUNT(*) FROM operacao_recebida WHERE id IN (?, ?)",
+              Integer.class,
+              first.operationId(),
+              second.operationId()));
+    } finally {
+      jdbc.execute(
+          "DROP TRIGGER IF EXISTS fail_sync_entity_for_test ON entidade_remota_sincronizada");
+      jdbc.execute("DROP FUNCTION IF EXISTS fail_sync_entity_for_test()");
+    }
   }
 
   @Test
@@ -330,6 +489,36 @@ class DeviceAuthenticationIntegrationTest {
             .getResponse()
             .getContentAsString();
     return objectMapper.readValue(response, AccessToken.class);
+  }
+
+  private OperationsResponse submitOperations(AccessToken token, OperationsRequest request)
+      throws Exception {
+    String response =
+        mockMvc
+            .perform(
+                post("/sync/operations")
+                    .header("Authorization", "Bearer " + token.accessToken())
+                    .header(SyncContract.VERSION_HEADER, "1")
+                    .contentType("application/json")
+                    .content(objectMapper.writeValueAsString(request)))
+            .andExpect(status().isOk())
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+    return objectMapper.readValue(response, OperationsResponse.class);
+  }
+
+  private static OperationSubmission operation(
+      UUID operationId, UUID entityId, long expectedVersion, String entityType) {
+    return new OperationSubmission(
+        operationId,
+        operationId.toString(),
+        entityType,
+        entityId,
+        "UPSERT",
+        expectedVersion,
+        1,
+        Map.of("recordId", entityId.toString(), "sample", true));
   }
 
   private record Enrollment(UUID establishmentId, String pairingCode, Instant expiresAt) {}
