@@ -23,7 +23,7 @@ final class LocalLoginDialog {
     Dialog<AuthenticatedSession> dialog = new Dialog<>();
     dialog.setTitle("Login local — Tucumã Gestão");
     dialog.setHeaderText("Entre com sua conta local.");
-    if (owner != null) dialog.initOwner(owner);
+    if (owner != null && owner.getScene() != null) dialog.initOwner(owner);
     ButtonType loginButton = new ButtonType("Entrar", ButtonBar.ButtonData.OK_DONE);
     dialog.getDialogPane().getButtonTypes().addAll(loginButton, ButtonType.CANCEL);
     TucumaTheme.apply(dialog.getDialogPane());

@@ -57,7 +57,9 @@ class InitialAdministratorDialogTest {
               java.util.UUID.randomUUID());
       CompletableFuture<Boolean> dialogResult = new CompletableFuture<>();
       Platform.runLater(
-          () -> dialogResult.complete(InitialAdministratorDialog.showAndCreate(owner, useCase)));
+          () ->
+              dialogResult.complete(
+                  InitialAdministratorDialog.showAndCreate(new Stage(), useCase)));
       WaitForAsyncUtils.waitFor(
           5,
           TimeUnit.SECONDS,
