@@ -2,6 +2,7 @@ package br.com.espacotucuma.sync;
 
 import br.com.espacotucuma.sync.contract.ApiErrorResponse;
 import br.com.espacotucuma.sync.contract.BackupRequest;
+import br.com.espacotucuma.sync.contract.BackupsResponse;
 import br.com.espacotucuma.sync.contract.ChangesResponse;
 import br.com.espacotucuma.sync.contract.OperationResult;
 import br.com.espacotucuma.sync.contract.OperationsRequest;
@@ -192,8 +193,12 @@ class SyncContractController {
   }
 
   @GetMapping("/backups")
-  ResponseEntity<ApiErrorResponse> listBackups() {
-    return notImplemented();
+  ResponseEntity<BackupsResponse> listBackups(HttpServletRequest httpRequest) {
+    UUID establishmentId =
+        (UUID) httpRequest.getAttribute(SyncAuthenticationFilter.ESTABLISHMENT_ID);
+    return ResponseEntity.ok()
+        .cacheControl(CacheControl.noStore())
+        .body(backupSnapshotService.listVerified(establishmentId));
   }
 
   @PostMapping("/restore-request")

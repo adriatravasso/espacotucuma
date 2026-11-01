@@ -8,9 +8,11 @@ import software.amazon.awssdk.core.ResponseBytes;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.services.s3.model.S3Exception;
 import software.amazon.awssdk.services.s3.model.ServerSideEncryption;
 
 /** Private S3-compatible storage; public ACLs and permanent URLs are never created. */
@@ -52,9 +54,22 @@ class S3BackupObjectStorage implements BackupObjectStorage {
   @Override
   public byte[] get(String key) {
     requireBucket();
-    ResponseBytes<GetObjectResponse> response =
-        client.getObjectAsBytes(GetObjectRequest.builder().bucket(bucket).key(key).build());
-    return response.asByteArray();
+    try {
+      ResponseBytes<GetObjectResponse> response =
+          client.getObjectAsBytes(GetObjectRequest.builder().bucket(bucket).key(key).build());
+      return response.asByteArray();
+    } catch (S3Exception exception) {
+      if (exception.statusCode() == 404) {
+        throw new BackupObjectMissingException("Objeto privado de backup não encontrado.");
+      }
+      throw exception;
+    }
+  }
+
+  @Override
+  public void delete(String key) {
+    requireBucket();
+    client.deleteObject(DeleteObjectRequest.builder().bucket(bucket).key(key).build());
   }
 
   private void requireBucket() {

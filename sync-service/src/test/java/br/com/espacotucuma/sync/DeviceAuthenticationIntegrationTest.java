@@ -109,6 +109,15 @@ class DeviceAuthenticationIntegrationTest {
     assertEquals(SyncContract.VERSION, status.contractVersion());
     assertEquals(enrollment.establishmentId(), status.establishmentId());
     assertEquals(pairing.deviceId(), status.deviceId());
+    mockMvc
+        .perform(
+            get("/sync/backups")
+                .header("Authorization", "Bearer " + token.accessToken())
+                .header(SyncContract.VERSION_HEADER, SyncContract.VERSION))
+        .andExpect(status().isOk())
+        .andExpect(header().string("Cache-Control", "no-store"))
+        .andExpect(jsonPath("$.contractVersion").value(SyncContract.VERSION))
+        .andExpect(jsonPath("$.backups").isEmpty());
 
     mockMvc
         .perform(

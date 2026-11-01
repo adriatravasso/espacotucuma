@@ -2,17 +2,28 @@ package br.com.espacotucuma.sync;
 
 import br.com.espacotucuma.sync.contract.BackupRequest;
 import br.com.espacotucuma.sync.contract.BackupResponse;
+import br.com.espacotucuma.sync.contract.BackupsResponse;
 import br.com.espacotucuma.sync.contract.SyncContract;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Set;
+import java.util.TreeMap;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -21,20 +32,27 @@ import org.springframework.transaction.support.TransactionTemplate;
 @Service
 class BackupSnapshotService {
   private static final int SNAPSHOT_FORMAT_VERSION = 1;
+  private static final Logger LOGGER = LoggerFactory.getLogger(BackupSnapshotService.class);
   private final JdbcTemplate jdbc;
   private final BackupObjectStorage storage;
   private final ObjectMapper objectMapper;
   private final TransactionTemplate transactions;
+  private final int retentionRecentCount;
+  private final int retentionCoverageDays;
 
   BackupSnapshotService(
       JdbcTemplate jdbc,
       BackupObjectStorage storage,
       ObjectMapper objectMapper,
-      PlatformTransactionManager transactionManager) {
+      PlatformTransactionManager transactionManager,
+      @Value("${tucuma.backup.retention.recent-count:30}") int retentionRecentCount,
+      @Value("${tucuma.backup.retention.coverage-days:90}") int retentionCoverageDays) {
     this.jdbc = jdbc;
     this.storage = storage;
     this.objectMapper = objectMapper;
     this.transactions = new TransactionTemplate(transactionManager);
+    this.retentionRecentCount = Math.max(1, retentionRecentCount);
+    this.retentionCoverageDays = Math.max(1, retentionCoverageDays);
   }
 
   BackupResponse create(UUID establishmentId, BackupRequest request) {
@@ -96,7 +114,8 @@ class BackupSnapshotService {
 
     int updated =
         jdbc.update(
-            "UPDATE backup_remoto SET checksum_sha256 = ?, estado = 'VALIDADO', validado_em = now() "
+            "UPDATE backup_remoto SET checksum_sha256 = ?, estado = 'VALIDADO', validado_em = now(), "
+                + "verificado_em = now(), resultado_verificacao = 'INTEGRO' "
                 + "WHERE id = ? AND estabelecimento_id = ? AND estado = 'PENDENTE'",
             checksum,
             backupId,
@@ -128,34 +147,188 @@ class BackupSnapshotService {
   }
 
   boolean verify(UUID establishmentId, UUID backupId) {
+    return verifyBackup(establishmentId, backupId) == VerificationResult.INTEGRO;
+  }
+
+  BackupsResponse listVerified(UUID establishmentId) {
+    List<UUID> backupIds =
+        jdbc.query(
+            "SELECT id FROM backup_remoto WHERE estabelecimento_id = ? AND estado = 'VALIDADO' "
+                + "ORDER BY criado_em DESC, id",
+            (rs, row) -> rs.getObject(1, UUID.class),
+            establishmentId);
+    for (UUID backupId : backupIds) verifyBackup(establishmentId, backupId);
+    List<BackupResponse> backups =
+        jdbc.query(
+            "SELECT id, sequencia, criado_em FROM backup_remoto WHERE estabelecimento_id = ? "
+                + "AND estado = 'VALIDADO' AND resultado_verificacao = 'INTEGRO' "
+                + "ORDER BY criado_em DESC, id",
+            (rs, row) ->
+                new BackupResponse(
+                    SyncContract.VERSION,
+                    rs.getObject("id", UUID.class),
+                    rs.getLong("sequencia"),
+                    "VALIDADO",
+                    rs.getTimestamp("criado_em").toInstant()),
+            establishmentId);
+    return new BackupsResponse(SyncContract.VERSION, backups);
+  }
+
+  @Scheduled(cron = "${tucuma.backup.maintenance-cron:0 0 2 * * *}", zone = "UTC")
+  void maintainBackups() {
+    maintainBackups(Instant.now());
+  }
+
+  void maintainBackups(Instant now) {
+    List<UUID> establishments =
+        jdbc.query(
+            "SELECT DISTINCT estabelecimento_id FROM backup_remoto WHERE estado = 'VALIDADO'",
+            (rs, row) -> rs.getObject(1, UUID.class));
+    for (UUID establishmentId : establishments) {
+      List<UUID> backupIds =
+          jdbc.query(
+              "SELECT id FROM backup_remoto WHERE estabelecimento_id = ? AND estado = 'VALIDADO'",
+              (rs, row) -> rs.getObject(1, UUID.class),
+              establishmentId);
+      for (UUID backupId : backupIds) verifyBackup(establishmentId, backupId);
+      try {
+        applyRetention(establishmentId, now);
+      } catch (RuntimeException failure) {
+        LOGGER.warn("Backup retention could not complete for establishment {}", establishmentId);
+      }
+    }
+  }
+
+  private VerificationResult verifyBackup(UUID establishmentId, UUID backupId) {
     List<StoredBackup> backups =
         jdbc.query(
-            "SELECT sequencia, chave_armazenamento, checksum_sha256, versao_formato "
+            "SELECT sequencia, chave_armazenamento, checksum_sha256, versao_formato, criado_em "
                 + "FROM backup_remoto WHERE id = ? AND estabelecimento_id = ? AND estado = 'VALIDADO'",
             (rs, row) ->
                 new StoredBackup(
+                    backupId,
                     rs.getLong("sequencia"),
                     rs.getString("chave_armazenamento"),
                     rs.getString("checksum_sha256").trim(),
-                    rs.getInt("versao_formato")),
+                    rs.getInt("versao_formato"),
+                    rs.getTimestamp("criado_em").toInstant()),
             backupId,
             establishmentId);
-    if (backups.isEmpty()) return false;
+    if (backups.isEmpty()) return VerificationResult.OBJETO_AUSENTE;
     StoredBackup backup = backups.getFirst();
-    byte[] content = storage.get(backup.key());
-    if (!backup.checksum().equals(sha256(content))) return false;
-    Snapshot snapshot = decode(content);
-    return snapshot.formatVersion() == backup.formatVersion()
-        && snapshot.schemaVersion() > 0
-        && snapshot.checkpoint() == backup.checkpoint()
-        && snapshot.establishmentId().equals(establishmentId)
-        && snapshot.manifest().entityCount() == snapshot.entities().size()
-        && snapshot.manifest().reconciliationCount() == snapshot.reconciliations().size()
-        && snapshot.manifest().entitiesSha256().equals(sha256(encode(snapshot.entities())))
-        && snapshot
-            .manifest()
-            .reconciliationsSha256()
-            .equals(sha256(encode(snapshot.reconciliations())));
+    byte[] content;
+    try {
+      content = storage.get(backup.key());
+    } catch (BackupObjectMissingException missing) {
+      return recordVerification(establishmentId, backupId, VerificationResult.OBJETO_AUSENTE);
+    } catch (RuntimeException storageFailure) {
+      return recordVerification(establishmentId, backupId, VerificationResult.ERRO_STORAGE);
+    }
+    if (!backup.checksum().equals(sha256(content))) {
+      return recordVerification(establishmentId, backupId, VerificationResult.CHECKSUM_INVALIDO);
+    }
+    Snapshot snapshot;
+    try {
+      snapshot = decode(content);
+    } catch (IllegalStateException invalidFormat) {
+      return recordVerification(establishmentId, backupId, VerificationResult.FORMATO_INVALIDO);
+    }
+    boolean valid;
+    try {
+      valid =
+          snapshot.formatVersion() == backup.formatVersion()
+              && snapshot.schemaVersion() > 0
+              && snapshot.checkpoint() == backup.checkpoint()
+              && snapshot.establishmentId().equals(establishmentId)
+              && snapshot.manifest().entityCount() == snapshot.entities().size()
+              && snapshot.manifest().reconciliationCount() == snapshot.reconciliations().size()
+              && snapshot.manifest().entitiesSha256().equals(sha256(encode(snapshot.entities())))
+              && snapshot
+                  .manifest()
+                  .reconciliationsSha256()
+                  .equals(sha256(encode(snapshot.reconciliations())));
+    } catch (RuntimeException invalidFormat) {
+      valid = false;
+    }
+    return recordVerification(
+        establishmentId,
+        backupId,
+        valid ? VerificationResult.INTEGRO : VerificationResult.FORMATO_INVALIDO);
+  }
+
+  private VerificationResult recordVerification(
+      UUID establishmentId, UUID backupId, VerificationResult result) {
+    String state =
+        result == VerificationResult.INTEGRO || result == VerificationResult.ERRO_STORAGE
+            ? "VALIDADO"
+            : "FALHOU";
+    jdbc.update(
+        "UPDATE backup_remoto SET estado = ?, verificado_em = now(), resultado_verificacao = ? "
+            + "WHERE id = ? AND estabelecimento_id = ? AND estado = 'VALIDADO'",
+        state,
+        result.name(),
+        backupId,
+        establishmentId);
+    return result;
+  }
+
+  private void applyRetention(UUID establishmentId, Instant now) {
+    transactions.executeWithoutResult(
+        status -> {
+          lockEstablishment(establishmentId);
+          List<StoredBackup> validBackups =
+              jdbc.query(
+                  "SELECT id, sequencia, chave_armazenamento, checksum_sha256, versao_formato, criado_em "
+                      + "FROM backup_remoto WHERE estabelecimento_id = ? AND estado = 'VALIDADO' "
+                      + "AND resultado_verificacao = 'INTEGRO' ORDER BY criado_em DESC, id",
+                  (rs, row) ->
+                      new StoredBackup(
+                          rs.getObject("id", UUID.class),
+                          rs.getLong("sequencia"),
+                          rs.getString("chave_armazenamento"),
+                          rs.getString("checksum_sha256").trim(),
+                          rs.getInt("versao_formato"),
+                          rs.getTimestamp("criado_em").toInstant()),
+                  establishmentId);
+          Set<UUID> retained = new HashSet<>();
+          validBackups.stream()
+              .limit(retentionRecentCount)
+              .map(StoredBackup::id)
+              .forEach(retained::add);
+
+          Instant cutoff = now.minus(Duration.ofDays(retentionCoverageDays));
+          var dailyCoverage = new TreeMap<LocalDate, StoredBackup>();
+          for (StoredBackup backup : validBackups) {
+            if (!backup.createdAt().isBefore(cutoff)) {
+              LocalDate day = backup.createdAt().atZone(ZoneOffset.UTC).toLocalDate();
+              dailyCoverage.putIfAbsent(day, backup);
+            }
+          }
+          dailyCoverage.values().stream().map(StoredBackup::id).forEach(retained::add);
+          validBackups.stream()
+              .filter(backup -> !backup.createdAt().isAfter(cutoff))
+              .findFirst()
+              .map(StoredBackup::id)
+              .ifPresent(retained::add);
+
+          for (StoredBackup backup : validBackups) {
+            if (retained.contains(backup.id())) continue;
+            try {
+              storage.delete(backup.key());
+            } catch (RuntimeException storageFailure) {
+              LOGGER.warn("Backup object could not be removed for backup {}", backup.id());
+              continue;
+            }
+            jdbc.update(
+                "UPDATE backup_remoto SET estado = 'EXPIRADO', verificado_em = ?, "
+                    + "resultado_verificacao = 'REMOVIDO_RETENCAO' "
+                    + "WHERE id = ? AND estabelecimento_id = ? AND estado = 'VALIDADO' "
+                    + "AND resultado_verificacao = 'INTEGRO'",
+                java.sql.Timestamp.from(now),
+                backup.id(),
+                establishmentId);
+          }
+        });
   }
 
   private Snapshot readSnapshot(UUID establishmentId, long checkpoint) {
@@ -275,5 +448,19 @@ class BackupSnapshotService {
       Instant createdAt,
       Instant resolvedAt) {}
 
-  private record StoredBackup(long checkpoint, String key, String checksum, int formatVersion) {}
+  enum VerificationResult {
+    INTEGRO,
+    CHECKSUM_INVALIDO,
+    FORMATO_INVALIDO,
+    OBJETO_AUSENTE,
+    ERRO_STORAGE
+  }
+
+  private record StoredBackup(
+      UUID id,
+      long checkpoint,
+      String key,
+      String checksum,
+      int formatVersion,
+      Instant createdAt) {}
 }
