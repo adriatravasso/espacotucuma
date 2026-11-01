@@ -31,13 +31,18 @@ public final class SqliteLocalCredentialRepository implements LocalCredentialRep
         () -> {
           try (PreparedStatement statement =
               connection.prepareStatement(
-                  "SELECT id, senha_hash FROM usuario WHERE login = ? AND ativo = 1")) {
+                  "SELECT id, nome, login, perfil, senha_hash FROM usuario WHERE login = ? AND ativo = 1")) {
             statement.setString(1, login);
             try (ResultSet result = statement.executeQuery()) {
               return result.next()
                   ? Optional.of(
                       new LocalCredential(
-                          UUID.fromString(result.getString("id")), result.getString("senha_hash")))
+                          UUID.fromString(result.getString("id")),
+                          result.getString("nome"),
+                          result.getString("login"),
+                          br.com.espacotucuma.desktop.application.identity.UserRole.valueOf(
+                              result.getString("perfil")),
+                          result.getString("senha_hash")))
                   : Optional.empty();
             }
           } catch (SQLException failure) {

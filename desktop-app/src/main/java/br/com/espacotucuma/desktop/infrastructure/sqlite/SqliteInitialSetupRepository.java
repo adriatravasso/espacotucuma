@@ -30,7 +30,7 @@ public final class SqliteInitialSetupRepository implements InitialSetupRepositor
               ResultSet result =
                   statement.executeQuery(
                       "SELECT (SELECT count(*) FROM estabelecimento) = 1 "
-                          + "AND (SELECT count(*) FROM usuario WHERE perfil = 'ADMINISTRADOR') = 1")) {
+                          + "AND (SELECT count(*) FROM usuario WHERE ativo = 1 AND perfil = 'ADMINISTRADOR') >= 1")) {
             return result.next() && result.getBoolean(1);
           } catch (SQLException failure) {
             throw new IllegalStateException(

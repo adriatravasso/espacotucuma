@@ -3,10 +3,13 @@ package br.com.espacotucuma.desktop.ui;
 import br.com.espacotucuma.desktop.DesktopRuntime;
 import javafx.application.Application;
 import javafx.application.Platform;
+import javafx.geometry.Insets;
 import javafx.scene.Scene;
 import javafx.scene.control.Alert;
+import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.layout.BorderPane;
+import javafx.scene.layout.HBox;
 import javafx.stage.Stage;
 
 public final class TucumaDesktopApplication extends Application {
@@ -33,12 +36,39 @@ public final class TucumaDesktopApplication extends Application {
       return;
     }
 
-    BorderPane root = new BorderPane(new Label("Sistema de Gestão do Espaço Tucumã"));
+    boolean smokeTest =
+        getParameters().getRaw().contains("--smoke-test") && runtime.isTestProfile();
+    if (smokeTest) {
+      if (runtime.login().login("admin", "SenhaOfflineForte2026!".toCharArray()).isEmpty()) {
+        throw new IllegalStateException("A credencial sintética do smoke test não foi aceita.");
+      }
+    } else if (LocalLoginDialog.show(stage, runtime.login()).isEmpty()) {
+      Platform.exit();
+      return;
+    }
+
+    Label status = new Label("Sistema de Gestão do Espaço Tucumã");
+    Button logout = new Button("Encerrar sessão");
+    logout.setOnAction(
+        event -> {
+          runtime.logout().logout();
+          if (LocalLoginDialog.show(stage, runtime.login()).isEmpty()) {
+            stage.close();
+          } else {
+            status.setText(
+                "Sistema de Gestão do Espaço Tucumã — "
+                    + runtime.sessions().current().orElseThrow().user().name());
+          }
+        });
+    HBox toolbar = new HBox(8, logout);
+    toolbar.setPadding(new Insets(8));
+    BorderPane root = new BorderPane(status);
+    root.setTop(toolbar);
     stage.setTitle("Tucumã — Gestão");
     stage.setScene(new Scene(root, 900, 600));
     stage.show();
 
-    if (getParameters().getRaw().contains("--smoke-test")) {
+    if (smokeTest) {
       Platform.runLater(stage::close);
     }
   }

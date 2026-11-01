@@ -7,6 +7,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import br.com.espacotucuma.desktop.application.client.Client;
 import br.com.espacotucuma.desktop.application.client.RegisterClientUseCase;
+import br.com.espacotucuma.desktop.application.identity.AuthenticatedUser;
+import br.com.espacotucuma.desktop.application.identity.AuthorizationService;
+import br.com.espacotucuma.desktop.application.identity.SessionContext;
+import br.com.espacotucuma.desktop.application.identity.UserRole;
 import br.com.espacotucuma.desktop.application.outbox.PendingOperation;
 import br.com.espacotucuma.desktop.application.outbox.ServerConfirmation;
 import java.nio.file.Path;
@@ -32,8 +36,7 @@ class TransactionalOutboxTest {
       SqliteClientRepository clients =
           new SqliteClientRepository(database.connection(), unitOfWork);
       SqliteOutboxRepository outbox = new SqliteOutboxRepository(database.connection(), unitOfWork);
-      RegisterClientUseCase useCase =
-          new RegisterClientUseCase(unitOfWork, clients, outbox, STATION_ID);
+      RegisterClientUseCase useCase = registerClientUseCase(unitOfWork, clients, outbox);
 
       Client saved = useCase.register("  Maria Oliveira  ", "92999990000");
 
@@ -68,8 +71,7 @@ class TransactionalOutboxTest {
       SqliteClientRepository clients =
           new SqliteClientRepository(database.connection(), unitOfWork);
       SqliteOutboxRepository outbox = new SqliteOutboxRepository(database.connection(), unitOfWork);
-      RegisterClientUseCase useCase =
-          new RegisterClientUseCase(unitOfWork, clients, outbox, STATION_ID);
+      RegisterClientUseCase useCase = registerClientUseCase(unitOfWork, clients, outbox);
       try (Statement statement = database.connection().createStatement()) {
         statement.execute(
             "CREATE TRIGGER reject_outbox BEFORE INSERT ON operacao_pendente "
@@ -93,8 +95,7 @@ class TransactionalOutboxTest {
       SqliteClientRepository clients =
           new SqliteClientRepository(database.connection(), unitOfWork);
       SqliteOutboxRepository outbox = new SqliteOutboxRepository(database.connection(), unitOfWork);
-      RegisterClientUseCase useCase =
-          new RegisterClientUseCase(unitOfWork, clients, outbox, STATION_ID);
+      RegisterClientUseCase useCase = registerClientUseCase(unitOfWork, clients, outbox);
       Client saved = useCase.register("Ana Souza", null);
       PendingOperation pending = outbox.findPending(1).getFirst();
 
@@ -143,6 +144,16 @@ class TransactionalOutboxTest {
         ResultSet result = statement.executeQuery(sql)) {
       return result.next() ? result.getInt(1) : -1;
     }
+  }
+
+  private RegisterClientUseCase registerClientUseCase(
+      SqliteUnitOfWork unitOfWork, SqliteClientRepository clients, SqliteOutboxRepository outbox) {
+    SessionContext sessions = new SessionContext();
+    sessions.establish(
+        new AuthenticatedUser(
+            UUID.randomUUID(), "Admin de teste", "admin", UserRole.ADMINISTRADOR));
+    return new RegisterClientUseCase(
+        unitOfWork, clients, outbox, STATION_ID, new AuthorizationService(sessions));
   }
 
   private String scalarString(Connection connection, String sql) throws Exception {
