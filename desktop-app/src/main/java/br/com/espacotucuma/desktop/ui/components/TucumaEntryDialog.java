@@ -178,6 +178,15 @@ public final class TucumaEntryDialog extends Dialog<Map<String, String>> {
   }
 
   private String fieldLabel(String id) {
+    String known =
+        switch (id) {
+          case "name" -> "Nome";
+          case "phone" -> "Telefone";
+          case "contact" -> "Contato opcional";
+          case "preferences" -> "Preferências administrativas";
+          default -> null;
+        };
+    if (known != null) return known;
     String label = id.replaceAll("([a-z])([A-Z])", "$1 $2").replace('_', ' ');
     return label.isEmpty() ? id : Character.toUpperCase(label.charAt(0)) + label.substring(1);
   }

@@ -8,6 +8,8 @@ import java.util.UUID;
 public interface OutboxRepository {
   void enqueue(PendingOperation operation);
 
+  long expectedVersionForNext(String entity, UUID entityId);
+
   List<PendingOperation> findPending(int limit);
 
   boolean recordAttempt(UUID operationId);

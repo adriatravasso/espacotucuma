@@ -52,6 +52,28 @@ public final class SqliteOutboxRepository implements OutboxRepository {
   }
 
   @Override
+  public long expectedVersionForNext(String entity, UUID entityId) {
+    return unitOfWork.read(
+        () -> {
+          String sql =
+              "SELECT versao_esperada, versao_remota_confirmada FROM operacao_pendente "
+                  + "WHERE entidade = ? AND entidade_id = ? ORDER BY rowid DESC LIMIT 1";
+          try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, entity);
+            statement.setString(2, entityId.toString());
+            try (ResultSet result = statement.executeQuery()) {
+              if (!result.next()) return 0L;
+              long confirmedVersion = result.getLong("versao_remota_confirmada");
+              return result.wasNull() ? result.getLong("versao_esperada") + 1 : confirmedVersion;
+            }
+          } catch (SQLException failure) {
+            throw new IllegalStateException(
+                "Não foi possível determinar a versão remota esperada.", failure);
+          }
+        });
+  }
+
+  @Override
   public List<PendingOperation> findPending(int limit) {
     if (limit < 1) {
       throw new IllegalArgumentException("O limite de consulta deve ser positivo.");

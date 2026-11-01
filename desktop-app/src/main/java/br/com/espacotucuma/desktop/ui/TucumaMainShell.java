@@ -32,18 +32,26 @@ final class TucumaMainShell {
   private final Map<String, Button> moduleButtons = new LinkedHashMap<>();
   private final StatusBar statusBar = new StatusBar();
   private final Supplier<ProtectionStatus> statusLoader;
+  private final Parent clientsView;
   private final Timeline statusRefresh;
   private Runnable logoutAction = () -> {};
+  private String activeModule = "Início";
 
   TucumaMainShell(String userName) {
     this(
         () ->
             new ProtectionStatus(
-                userName, Path.of("dados/tucuma.sqlite"), 0, 0, null, 0, null, null));
+                userName, Path.of("dados/tucuma.sqlite"), 0, 0, null, 0, null, null),
+        null);
   }
 
   TucumaMainShell(Supplier<ProtectionStatus> statusLoader) {
+    this(statusLoader, null);
+  }
+
+  TucumaMainShell(Supplier<ProtectionStatus> statusLoader, Parent clientsView) {
     this.statusLoader = statusLoader;
+    this.clientsView = clientsView;
     root.setTop(new VBox(createMenuBar(), createToolBar()));
     root.setLeft(createNavigation());
     root.setCenter(workArea);
@@ -78,6 +86,12 @@ final class TucumaMainShell {
 
   void stopStatusRefresh() {
     statusRefresh.stop();
+  }
+
+  void refreshActiveModuleAccess() {
+    if (activeModule.equals("Clientes") && clientsView instanceof ClientRegistryPane clientPane) {
+      clientPane.refreshAccess();
+    }
   }
 
   private MenuBar createMenuBar() {
@@ -169,6 +183,7 @@ final class TucumaMainShell {
   }
 
   private void showModule(String module) {
+    activeModule = module;
     pageTitle.setId("moduleTitle");
     pageTitle.setText(module);
     Label placeholder =
@@ -179,7 +194,12 @@ final class TucumaMainShell {
     placeholder.setId("moduleDescription");
     workArea.setTop(pageTitle);
     BorderPane.setMargin(pageTitle, new Insets(12, 14, 8, 14));
-    workArea.setCenter(placeholder);
+    if (module.equals("Clientes") && clientsView instanceof ClientRegistryPane clientPane) {
+      clientPane.refreshAccess();
+      workArea.setCenter(clientPane);
+    } else {
+      workArea.setCenter(placeholder);
+    }
     BorderPane.setMargin(placeholder, new Insets(8, 14, 14, 14));
     moduleButtons.forEach((name, button) -> button.setDisable(name.equals(module)));
   }

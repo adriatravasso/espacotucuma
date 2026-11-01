@@ -3,6 +3,8 @@ package br.com.espacotucuma.desktop.application.identity;
 public enum Permission {
   CLIENT_READ,
   CLIENT_REGISTER,
+  CLIENT_UPDATE,
+  CLIENT_DEACTIVATE,
   SCHEDULE_READ,
   SCHEDULE_MANAGE,
   OWN_SCHEDULE_READ,

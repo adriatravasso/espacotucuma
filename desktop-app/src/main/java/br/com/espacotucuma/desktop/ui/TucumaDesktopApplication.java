@@ -44,7 +44,14 @@ public final class TucumaDesktopApplication extends Application {
       return;
     }
 
-    shell = new TucumaMainShell(runtime::protectionStatus);
+    shell =
+        new TucumaMainShell(
+            runtime::protectionStatus,
+            new ClientRegistryPane(
+                runtime.clients(),
+                runtime.registerClient(),
+                runtime.maintainClient(),
+                runtime.authorization()));
     shell.setLogoutAction(
         () -> {
           runtime.logout().logout();
@@ -52,6 +59,7 @@ public final class TucumaDesktopApplication extends Application {
             stage.close();
           } else {
             shell.refreshStatus();
+            shell.refreshActiveModuleAccess();
           }
         });
     stage.setTitle("Tucumã — Gestão");

@@ -36,6 +36,7 @@ public final class AuthorizationService {
       return switch (permission) {
         case CLIENT_READ,
             CLIENT_REGISTER,
+            CLIENT_UPDATE,
             SCHEDULE_READ,
             SCHEDULE_MANAGE,
             ATTENDANCE_RECORD,
