@@ -2,9 +2,10 @@ package br.com.espacotucuma.desktop;
 
 import br.com.espacotucuma.desktop.ui.TucumaDesktopApplication;
 
-public final class DesktopSmokeLauncher {
+/** Starts JavaFX through a regular main class so the packaged launcher can load its runtime. */
+public final class DesktopLauncher {
 
-  private DesktopSmokeLauncher() {}
+  private DesktopLauncher() {}
 
   public static void main(String[] args) {
     TucumaDesktopApplication.main(args);
