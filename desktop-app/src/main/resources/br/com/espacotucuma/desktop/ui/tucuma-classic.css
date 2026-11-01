@@ -197,3 +197,8 @@
   -fx-border-color: #aebbc7 transparent transparent transparent;
   -fx-border-width: 1px 0 0 0;
 }
+
+#formMessage,
+#tableMessage {
+  -fx-text-fill: #8b2525;
+}
