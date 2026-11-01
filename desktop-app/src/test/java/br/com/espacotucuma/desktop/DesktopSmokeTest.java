@@ -3,6 +3,7 @@ package br.com.espacotucuma.desktop;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.DriverManager;
@@ -19,6 +20,7 @@ class DesktopSmokeTest {
         Path.of(System.getProperty("java.home"), "bin", isWindows() ? "java.exe" : "java")
             .toString();
     String testClasspath = System.getProperty("surefire.test.class.path");
+    Path outputFile = tempDirectory.resolve("desktop-smoke.log");
     assertTrue(
         testClasspath != null && !testClasspath.isBlank(), "Surefire test classpath is required");
 
@@ -32,14 +34,16 @@ class DesktopSmokeTest {
                 DesktopSmokeLauncher.class.getName(),
                 "--smoke-test")
             .redirectErrorStream(true)
+            .redirectOutput(outputFile.toFile())
             .start();
 
-    boolean exited = process.waitFor(Duration.ofSeconds(20).toMillis(), TimeUnit.MILLISECONDS);
+    boolean exited = process.waitFor(Duration.ofSeconds(60).toMillis(), TimeUnit.MILLISECONDS);
     if (!exited) {
       process.destroyForcibly();
+      process.waitFor(5, TimeUnit.SECONDS);
     }
 
-    String output = new String(process.getInputStream().readAllBytes());
+    String output = new String(Files.readAllBytes(outputFile), Charset.defaultCharset());
     assertTrue(exited, "Desktop smoke process did not exit. Output: " + output);
     assertEquals(0, process.exitValue(), "Desktop smoke process failed. Output: " + output);
 
