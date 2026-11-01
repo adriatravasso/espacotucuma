@@ -380,7 +380,12 @@ class AppointmentRegistryPaneTest {
           });
       Platform.runLater(() -> robot.lookup("#cashClose").queryButton().fire());
       WaitForAsyncUtils.waitFor(
-          8, TimeUnit.SECONDS, () -> pane.stateLabel().getText().contains("Último turno fechado"));
+          8,
+          TimeUnit.SECONDS,
+          () ->
+              pane.stateLabel().getText().contains("Último turno fechado")
+                  && pane.summaryLabel().getText().contains("esperado R$ 60,00")
+                  && pane.summaryLabel().getText().contains("conferido R$ 60,00"));
       assertTrue(pane.summaryLabel().getText().contains("esperado R$ 60,00"));
       assertTrue(pane.summaryLabel().getText().contains("conferido R$ 60,00"));
       assertEquals(3, fixture.scalar("SELECT COUNT(*) FROM conferencia_caixa"));
