@@ -32,9 +32,33 @@ function Install-Package([string] $Path) {
     $script:installedMsi = $Path
 }
 
+function Find-PackagedExecutable {
+    $roots = @(
+        $installDirectory,
+        (Join-Path $env:LOCALAPPDATA 'EspacoTucuma'),
+        (Join-Path $env:LOCALAPPDATA 'Tucumã — Gestão'),
+        (Join-Path $env:LOCALAPPDATA 'Programs\EspacoTucuma'),
+        (Join-Path $env:LOCALAPPDATA 'Programs\Tucumã — Gestão'),
+        $env:LOCALAPPDATA
+    )
+    $uninstallRoot = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall'
+    if (Test-Path $uninstallRoot) {
+        $roots += Get-ChildItem $uninstallRoot | ForEach-Object {
+            (Get-ItemProperty $_.PSPath).InstallLocation
+        } | Where-Object { $_ }
+    }
+
+    foreach ($root in $roots | Select-Object -Unique) {
+        if (-not (Test-Path $root)) { continue }
+        $match = Get-ChildItem -LiteralPath $root -Filter "$appName.exe" -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($match) { return $match.FullName }
+    }
+    throw "Executável instalado não localizado. Diretórios verificados: $($roots -join '; ')"
+}
+
 function Invoke-PackagedSmoke {
-    $exe = Join-Path $installDirectory "$appName.exe"
-    if (-not (Test-Path $exe)) { throw "Executável instalado não encontrado: $exe" }
+    $exe = Find-PackagedExecutable
+    Write-Output "Executável instalado: $exe"
     $env:TUCUMA_PROFILE = 'test'
     $env:TUCUMA_DATA_ROOT = $dataRoot
     $process = Start-Process -FilePath $exe -ArgumentList '--smoke-test' -PassThru -Wait
