@@ -2,6 +2,7 @@ package br.com.espacotucuma.sync;
 
 import br.com.espacotucuma.sync.contract.ApiErrorResponse;
 import br.com.espacotucuma.sync.contract.BackupRequest;
+import br.com.espacotucuma.sync.contract.ChangesResponse;
 import br.com.espacotucuma.sync.contract.OperationResult;
 import br.com.espacotucuma.sync.contract.OperationsRequest;
 import br.com.espacotucuma.sync.contract.OperationsResponse;
@@ -11,6 +12,8 @@ import br.com.espacotucuma.sync.contract.SyncContract;
 import br.com.espacotucuma.sync.contract.SyncContractValidator;
 import br.com.espacotucuma.sync.contract.SyncErrorCode;
 import br.com.espacotucuma.sync.contract.SyncStatusResponse;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.ArrayList;
 import java.util.List;
@@ -29,12 +32,18 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/sync")
 class SyncContractController {
+  private static final int MAX_CHANGE_PAGE_SIZE = 100;
+  private static final TypeReference<java.util.Map<String, Object>> JSON_OBJECT =
+      new TypeReference<>() {};
   private final JdbcTemplate jdbc;
   private final SyncOperationReceiver operationReceiver;
+  private final ObjectMapper objectMapper;
 
-  SyncContractController(JdbcTemplate jdbc, SyncOperationReceiver operationReceiver) {
+  SyncContractController(
+      JdbcTemplate jdbc, SyncOperationReceiver operationReceiver, ObjectMapper objectMapper) {
     this.jdbc = jdbc;
     this.operationReceiver = operationReceiver;
+    this.objectMapper = objectMapper;
   }
 
   @GetMapping("/status")
@@ -116,9 +125,53 @@ class SyncContractController {
   }
 
   @GetMapping("/changes")
-  ResponseEntity<ApiErrorResponse> changes(@RequestParam long after) {
+  ChangesResponse changes(
+      @RequestParam("after") long after,
+      @RequestParam(name = "limit", defaultValue = "100") int limit,
+      HttpServletRequest request) {
     if (after < 0) throw new IllegalArgumentException("Invalid checkpoint");
-    return notImplemented();
+    if (limit < 1 || limit > MAX_CHANGE_PAGE_SIZE) {
+      throw new IllegalArgumentException("Invalid change page size");
+    }
+    var establishmentId = (UUID) request.getAttribute(SyncAuthenticationFilter.ESTABLISHMENT_ID);
+    Long maximumSequence =
+        jdbc.queryForObject(
+            "SELECT COALESCE(MAX(sequencia), 0) FROM operacao_recebida WHERE estabelecimento_id = ?",
+            Long.class,
+            establishmentId);
+    if (maximumSequence == null || after > maximumSequence) {
+      throw new IllegalArgumentException("Checkpoint is ahead of the remote operation stream");
+    }
+    List<ChangesResponse.RemoteChange> changes =
+        jdbc.query(
+            "SELECT sequencia, id::text AS operation_id, dispositivo_id::text AS device_id, "
+                + "entidade, entidade_id::text AS entity_id, tipo_operacao, payload_versao, "
+                + "COALESCE((resultado->>'remoteVersion')::bigint, versao_esperada) AS entity_version, "
+                + "resultado_estado, payload::text AS payload "
+                + "FROM operacao_recebida WHERE estabelecimento_id = ? AND sequencia > ? "
+                + "ORDER BY sequencia LIMIT ?",
+            (rs, rowNum) -> {
+              try {
+                return new ChangesResponse.RemoteChange(
+                    rs.getLong("sequencia"),
+                    UUID.fromString(rs.getString("operation_id")),
+                    UUID.fromString(rs.getString("device_id")),
+                    rs.getString("entidade"),
+                    UUID.fromString(rs.getString("entity_id")),
+                    rs.getString("tipo_operacao"),
+                    rs.getInt("payload_versao"),
+                    rs.getLong("entity_version"),
+                    rs.getString("resultado_estado"),
+                    objectMapper.readValue(rs.getString("payload"), JSON_OBJECT));
+              } catch (java.io.IOException failure) {
+                throw new IllegalStateException("Stored change payload is invalid.", failure);
+              }
+            },
+            establishmentId,
+            after,
+            limit);
+    long checkpoint = changes.isEmpty() ? after : changes.getLast().sequence();
+    return new ChangesResponse(SyncContract.VERSION, checkpoint, List.copyOf(changes));
   }
 
   @PostMapping("/backup")

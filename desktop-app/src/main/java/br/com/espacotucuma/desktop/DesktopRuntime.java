@@ -34,6 +34,7 @@ import br.com.espacotucuma.desktop.application.port.scheduling.AppointmentReposi
 import br.com.espacotucuma.desktop.application.port.service.ServiceRepository;
 import br.com.espacotucuma.desktop.application.port.synchronization.DeviceCredentialStore;
 import br.com.espacotucuma.desktop.application.port.synchronization.ManualSynchronizationPort;
+import br.com.espacotucuma.desktop.application.port.synchronization.RemoteChangeRepository;
 import br.com.espacotucuma.desktop.application.prepaid.MaintainPrepaidPackagesUseCase;
 import br.com.espacotucuma.desktop.application.professional.MaintainProfessionalUseCase;
 import br.com.espacotucuma.desktop.application.reports.QueryCommercialReportsUseCase;
@@ -60,6 +61,7 @@ import br.com.espacotucuma.desktop.infrastructure.sqlite.SqlitePaymentRepository
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqlitePrepaidPackageRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteProfessionalRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteProtectionStatusRepository;
+import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteRemoteChangeRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteServiceRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteUnitOfWork;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteUserAdministrationRepository;
@@ -376,7 +378,7 @@ public final class DesktopRuntime implements AutoCloseable {
           new SqliteProtectionStatusRepository(database.connection(), unitOfWork);
       OutboxRepository outbox = new SqliteOutboxRepository(database.connection(), unitOfWork);
       ManualSynchronizationPort manualSynchronization =
-          createManualSynchronization(outbox, unitOfWork);
+          createManualSynchronization(outbox, unitOfWork, database.connection());
       DeactivateUserUseCase deactivateUser =
           new DeactivateUserUseCase(unitOfWork, userRepository, authorization, audit, stationId);
       ChangeUserRoleUseCase changeUserRole =
@@ -560,7 +562,7 @@ public final class DesktopRuntime implements AutoCloseable {
   }
 
   private static ManualSynchronizationPort createManualSynchronization(
-      OutboxRepository outbox, SqliteUnitOfWork unitOfWork) {
+      OutboxRepository outbox, SqliteUnitOfWork unitOfWork, java.sql.Connection connection) {
     String baseUrl = System.getenv("TUCUMA_SYNC_BASE_URL");
     String deviceId = System.getenv("TUCUMA_SYNC_DEVICE_ID");
     if (baseUrl == null || baseUrl.isBlank() || deviceId == null || deviceId.isBlank()) {
@@ -569,11 +571,19 @@ public final class DesktopRuntime implements AutoCloseable {
             "Configure TUCUMA_SYNC_BASE_URL e TUCUMA_SYNC_DEVICE_ID após parear esta estação.");
       };
     }
+    UUID configuredDeviceId = UUID.fromString(deviceId.trim());
+    RemoteChangeRepository remoteChanges =
+        new SqliteRemoteChangeRepository(
+            connection,
+            unitOfWork,
+            new com.fasterxml.jackson.databind.ObjectMapper(),
+            configuredDeviceId);
     return new HttpManualSynchronizationClient(
         URI.create(baseUrl.trim()),
-        UUID.fromString(deviceId.trim()),
+        configuredDeviceId,
         (DeviceCredentialStore) new WindowsCredentialStore(),
         outbox,
+        remoteChanges,
         unitOfWork);
   }
 
