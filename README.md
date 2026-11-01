@@ -2,6 +2,8 @@
 
 Aplicação de gestão Windows-first e offline-first para beleza e estética. A operação diária fica no desktop local; a sincronização com o serviço remoto é iniciada manualmente.
 
+**Este é um projeto fictício de portfólio que simula uma encomenda freelancer.** O Espaço Tucumã e todos os registros das demonstrações são sintéticos. Não representam contrato, faturamento, depoimentos ou implantação real em cliente.
+
 ## Módulos
 
 - `desktop-app`: aplicação JavaFX e banco operacional SQLite local.
@@ -16,6 +18,7 @@ Aplicação de gestão Windows-first e offline-first para beleza e estética. A 
 - [Instalação Windows](docs/INSTALACAO_WINDOWS.md).
 - [Segurança do serviço remoto](docs/SEGURANCA_SERVICO_REMOTO.md).
 - [Ambiente de demonstração](docs/AMBIENTE_DEMONSTRACAO.md) e [validação local](docs/VALIDACAO_LOCAL.md).
+- [Demonstração de portfólio](docs/DEMONSTRACAO_PORTFOLIO.md) — roteiro reproduzível e escopo real dos cenários.
 
 ## Build e execução
 
