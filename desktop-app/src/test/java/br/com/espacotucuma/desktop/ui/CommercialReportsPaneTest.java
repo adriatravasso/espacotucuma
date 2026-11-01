@@ -6,12 +6,17 @@ import br.com.espacotucuma.desktop.application.identity.AuthenticatedUser;
 import br.com.espacotucuma.desktop.application.identity.AuthorizationService;
 import br.com.espacotucuma.desktop.application.identity.SessionContext;
 import br.com.espacotucuma.desktop.application.identity.UserRole;
+import br.com.espacotucuma.desktop.application.reports.CommercialReportPeriod;
 import br.com.espacotucuma.desktop.application.reports.CommercialReportType;
 import br.com.espacotucuma.desktop.application.reports.QueryCommercialReportsUseCase;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.LocalDatabaseSession;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteCommercialReportRepository;
 import br.com.espacotucuma.desktop.infrastructure.sqlite.SqliteUnitOfWork;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.LocalDate;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import javafx.scene.Scene;
@@ -20,6 +25,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.testfx.api.FxRobot;
 import org.testfx.framework.junit5.ApplicationExtension;
 import org.testfx.framework.junit5.Start;
@@ -70,6 +77,63 @@ class CommercialReportsPaneTest {
               .getText()
               .contains("Emitido por Recepção"));
       robot.interact(pane::close);
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({"false,csv", "true,pdf"})
+  @Timeout(45)
+  void exportsLocalReportToCsvAndPdfFromTemporarySQLite(
+      boolean pdf, String extension, FxRobot robot, @TempDir Path temp) throws Exception {
+    try (LocalDatabaseSession database =
+        LocalDatabaseSession.open(temp.resolve("reports-export-ui.sqlite"))) {
+      var unit = new SqliteUnitOfWork(database.connection());
+      var sessions = new SessionContext();
+      sessions.establish(
+          new AuthenticatedUser(UUID.randomUUID(), "Recepção", "recepcao", UserRole.RECEPCAO));
+      var authorization = new AuthorizationService(sessions);
+      var reports =
+          new QueryCommercialReportsUseCase(
+              new SqliteCommercialReportRepository(database.connection(), unit), authorization);
+      var pane = new CommercialReportsPane(reports, authorization);
+      robot.interact(() -> stage.setScene(new Scene(pane, 1100, 700)));
+      Path destination = Path.of("target", "reports-export-" + UUID.randomUUID() + "." + extension);
+      LocalDate today = LocalDate.now(java.time.ZoneId.of("America/Manaus"));
+
+      try {
+        robot.interact(
+            () -> pane.exportReportTo(pdf, new CommercialReportPeriod(today, today), destination));
+
+        WaitForAsyncUtils.waitFor(
+            8,
+            TimeUnit.SECONDS,
+            () ->
+                !robot
+                    .lookup("#commercialReportMessage")
+                    .queryLabeled()
+                    .getText()
+                    .equals("Gerando arquivo com os dados locais…"));
+        assertTrue(
+            Files.exists(destination),
+            robot.lookup("#commercialReportMessage").queryLabeled().getText());
+        byte[] content = Files.readAllBytes(destination);
+        if (pdf) {
+          assertTrue(new String(content, Charset.forName("windows-1252")).startsWith("%PDF-1.4"));
+        } else {
+          assertTrue(
+              new String(content, StandardCharsets.UTF_8)
+                  .startsWith("\uFEFF\"Relatório\",\"Agenda do dia\""));
+        }
+        assertTrue(
+            robot
+                .lookup("#commercialReportMessage")
+                .queryLabeled()
+                .getText()
+                .contains(destination.getFileName().toString()));
+      } finally {
+        robot.interact(pane::close);
+        Files.deleteIfExists(destination);
+      }
     }
   }
 
